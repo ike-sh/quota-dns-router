@@ -20,9 +20,11 @@ type TelegramNotifier interface {
 }
 
 type DNSProvider interface {
+	ListZones(ctx context.Context, token string) ([]cloudflare.Zone, error)
 	LookupZoneID(ctx context.Context, token, zoneName string) (string, error)
 	LookupDNSRecord(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error)
 	LookupDNSRecordAnyType(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error)
+	CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (cloudflare.DNSRecord, error)
 	UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error
 }
 

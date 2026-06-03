@@ -58,6 +58,20 @@ func NewClient(httpClient HTTPClient) *Client {
 	}
 }
 
+func (c *Client) ListZones(ctx context.Context, token string) ([]Zone, error) {
+	v := url.Values{}
+	v.Set("per_page", "100")
+	body, err := c.get(ctx, token, "/zones?"+v.Encode())
+	if err != nil {
+		return nil, err
+	}
+	var resp apiResponse[[]Zone]
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Result, nil
+}
+
 func (c *Client) LookupZoneID(ctx context.Context, token, zoneName string) (string, error) {
 	v := url.Values{}
 	v.Set("name", zoneName)
@@ -108,6 +122,32 @@ func (c *Client) LookupDNSRecordAnyType(ctx context.Context, token, zoneID, reco
 		return DNSRecord{}, fmt.Errorf("未找到 DNS 记录: %s", recordName)
 	}
 	return resp.Result[0], nil
+}
+
+func (c *Client) CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (DNSRecord, error) {
+	payload := DNSRecord{
+		Type:    "A",
+		Name:    recordName,
+		Content: ip,
+		TTL:     ttl,
+		Proxied: proxied,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	respBody, err := c.request(ctx, token, http.MethodPost, "/zones/"+zoneID+"/dns_records", body)
+	if err != nil {
+		return DNSRecord{}, err
+	}
+	var resp apiResponse[DNSRecord]
+	if err := json.Unmarshal(respBody, &resp); err != nil {
+		return DNSRecord{}, err
+	}
+	if !resp.Success {
+		return DNSRecord{}, fmt.Errorf("Cloudflare 创建 DNS A 记录失败")
+	}
+	return resp.Result, nil
 }
 
 func (c *Client) UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error {

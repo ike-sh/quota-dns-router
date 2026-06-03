@@ -11,12 +11,19 @@ import (
 )
 
 type fakeDNS struct {
+	zones        []cloudflare.Zone
 	zoneID       string
 	zoneErr      error
 	record       cloudflare.DNSRecord
 	recordErr    error
 	anyRecord    cloudflare.DNSRecord
 	anyRecordErr error
+	createRecord cloudflare.DNSRecord
+	createErr    error
+}
+
+func (f fakeDNS) ListZones(ctx context.Context, token string) ([]cloudflare.Zone, error) {
+	return f.zones, f.zoneErr
 }
 
 func (f fakeDNS) LookupZoneID(ctx context.Context, token, zoneName string) (string, error) {
@@ -29,6 +36,13 @@ func (f fakeDNS) LookupDNSRecord(ctx context.Context, token, zoneID, recordName 
 
 func (f fakeDNS) LookupDNSRecordAnyType(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error) {
 	return f.anyRecord, f.anyRecordErr
+}
+
+func (f fakeDNS) CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (cloudflare.DNSRecord, error) {
+	if f.createRecord.ID != "" || f.createErr != nil {
+		return f.createRecord, f.createErr
+	}
+	return cloudflare.DNSRecord{ID: "created", Type: "A", Name: recordName, Content: ip, TTL: ttl, Proxied: proxied}, nil
 }
 
 func (f fakeDNS) UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error {

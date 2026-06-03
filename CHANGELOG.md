@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.1.0-alpha.4
+
+- Telegram 初始化流程改为“按钮 + 向导”优先，覆盖 Cloudflare、DNS、分组、节点、策略和 Agent 安装。
+- `/cf` 新增 Token 输入、Zone 选择、手动输入 Zone Name、自动查询 Zone 列表和下一步按钮。
+- `/dns` 新增分组选择、记录名逐步输入、记录不存在时的节点选择创建流程。
+- `/groups`、`/nodes`、`/policy`、`/agent` 新增面板和向导式交互，保留命令行直传兼容。
+- 抽象统一 pending 状态处理，错误输入不清状态，`/cancel` 可取消，切换向导会提示已切换。
+- Cloudflare Token 回复和诊断保持脱敏，尝试删除 Token 输入消息但不因删除失败中断流程。
+- Agent 安装命令改为显式 `--master` 参数，join code 有效期缩短为 30 分钟。
+- 版本升级到 `0.1.0-alpha.4`，同步更新 Master / Agent CLI 与安装脚本版本输出。
+
 ## 0.1.0-alpha.3
 
 - 修复 Telegram `/config_master_url` 等待输入状态在错误输入后丢失的问题。

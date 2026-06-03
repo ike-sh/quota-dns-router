@@ -158,6 +158,14 @@ func (b *Bot) AnswerCallback(ctx context.Context, callbackID, text string) error
 	return b.post(ctx, "/answerCallbackQuery", payload)
 }
 
+func (b *Bot) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	}
+	return b.post(ctx, "/deleteMessage", payload)
+}
+
 func (b *Bot) GetMe(ctx context.Context) (BotUser, error) {
 	var out BotUser
 	if err := b.get(ctx, "/getMe", &out); err != nil {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.3"
+VERSION="0.1.0-alpha.4"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -391,7 +391,7 @@ start_service
 step "[8/8] 安装完成"
 check_service
 echo "Master 已安装并启动。"
-echo "下一步：在 Telegram 向 Bot 发送 /start，然后配置 Master 公网地址、Cloudflare、DNS、节点和 Agent。"
+echo "下一步：在 Telegram 向 Bot 发送 /start，然后按按钮依次完成 Master 公网地址、Cloudflare、DNS、分组、节点和 Agent 安装。"
 if [ -n "$SUGGESTED_PUBLIC_API_URL" ]; then
   echo "检测到公网地址建议："
   echo "$SUGGESTED_PUBLIC_API_URL"

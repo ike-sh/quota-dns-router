@@ -122,14 +122,14 @@ func AgentInstallMissingItems(status SetupStatus) []string {
 
 func FormatSetupGuide(status SetupStatus) string {
 	var b strings.Builder
-	b.WriteString("初始化步骤：\n")
-	b.WriteString(stepLine(status.PublicURLConfigured, "1) 配置 Master 公网地址", "/config_master_url"))
-	b.WriteString(stepLine(status.CloudflareTokenConfigured, "2) 配置 Cloudflare Token", "/cf"))
-	b.WriteString(stepLine(strings.TrimSpace(status.ZoneName) != "" && strings.TrimSpace(status.ZoneID) != "" && status.DNSConfigCount > 0, "3) 配置 Zone / DNS A 记录", "/dns set <分组名> <A记录>"))
-	b.WriteString(stepLine(status.GroupCount > 0, "4) 添加分组", "/groups add <分组名>"))
-	b.WriteString(stepLine(status.NodeCount > 0, "5) 添加节点", "/nodes add <节点名> <公网IP> <分组名> ..."))
-	b.WriteString(stepLine(true, "6) 设置流量策略", "/policy set ..."))
-	b.WriteString(stepLine(len(AgentInstallMissingItems(status)) == 0, "7) 生成 Agent 安装命令", "/agent install <节点名>"))
+	b.WriteString("初始化步骤：优先点击下面的按钮完成。\n")
+	b.WriteString(stepLine(status.PublicURLConfigured, "1) 配置 Master 公网地址", "按钮：1. 配置 Master 公网地址"))
+	b.WriteString(stepLine(status.CloudflareTokenConfigured, "2) 配置 Cloudflare Token", "按钮：2. Cloudflare 配置"))
+	b.WriteString(stepLine(strings.TrimSpace(status.ZoneName) != "" && strings.TrimSpace(status.ZoneID) != "" && status.DNSConfigCount > 0, "3) 配置 Zone / DNS A 记录", "按钮：3. DNS 配置"))
+	b.WriteString(stepLine(status.GroupCount > 0, "4) 添加分组", "按钮：4. 分组管理"))
+	b.WriteString(stepLine(status.NodeCount > 0, "5) 添加节点", "按钮：5. 节点管理"))
+	b.WriteString(stepLine(true, "6) 设置流量策略", "按钮：6. 流量策略"))
+	b.WriteString(stepLine(len(AgentInstallMissingItems(status)) == 0, "7) 生成 Agent 安装命令", "按钮：7. Agent 安装"))
 	if len(status.Missing) > 0 {
 		b.WriteString("\n缺少配置：")
 		b.WriteString(strings.Join(status.Missing, "、"))

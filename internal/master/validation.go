@@ -2,7 +2,6 @@ package master
 
 import (
 	"fmt"
-	"net"
 	"strings"
 
 	"quota-dns-router-go/internal/db"
@@ -22,8 +21,8 @@ func ValidateNodeConfig(node db.Node) error {
 	if strings.TrimSpace(node.GroupID) == "" {
 		return fmt.Errorf("节点必须属于一个分组")
 	}
-	if ip := net.ParseIP(strings.TrimSpace(node.PublicIP)); ip == nil {
-		return fmt.Errorf("节点公网 IP 无效")
+	if err := ValidatePublicIPv4(node.PublicIP); err != nil {
+		return err
 	}
 	if node.MonthlyQuotaBytes <= 0 {
 		return fmt.Errorf("月流量总量必须大于 0")

@@ -13,7 +13,7 @@ func TestAgentVersionOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	want := "quota-dns-router agent 0.1.0-alpha.3"
+	want := "quota-dns-router agent 0.1.0-alpha.4"
 	if strings.TrimSpace(got) != want {
 		t.Fatalf("got %q want %q", strings.TrimSpace(got), want)
 	}

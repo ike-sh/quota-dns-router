@@ -20,6 +20,7 @@ type TelegramController struct {
 	PollTimeout  time.Duration
 	DNS          DNSProvider
 	sessions     map[int64]string
+	sessionMeta  map[int64]*telegramSessionMeta
 }
 
 func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL string, pollTimeout time.Duration, dns DNSProvider) *TelegramController {
@@ -30,6 +31,7 @@ func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL stri
 		PollTimeout:  pollTimeout,
 		DNS:          dns,
 		sessions:     make(map[int64]string),
+		sessionMeta:  make(map[int64]*telegramSessionMeta),
 	}
 }
 
@@ -43,6 +45,9 @@ func (c *TelegramController) setSession(chatID int64, state string) {
 func (c *TelegramController) clearSession(chatID int64) {
 	if c.sessions != nil {
 		delete(c.sessions, chatID)
+	}
+	if c.sessionMeta != nil {
+		delete(c.sessionMeta, chatID)
 	}
 }
 
@@ -73,7 +78,7 @@ func (c *TelegramController) handleUpdate(ctx context.Context, update telegram.U
 		if !c.Bot.IsAdmin(update.Message.From.ID) {
 			return c.Bot.SendMessage(ctx, update.Message.Chat.ID, "无权限操作。", nil)
 		}
-		return c.handleText(ctx, update.Message.Chat.ID, strings.TrimSpace(update.Message.Text))
+		return c.handleMessage(ctx, update.Message)
 	}
 	if update.CallbackQuery != nil {
 		if !c.Bot.IsAdmin(update.CallbackQuery.From.ID) {
@@ -86,29 +91,38 @@ func (c *TelegramController) handleUpdate(ctx context.Context, update telegram.U
 	return nil
 }
 
+func (c *TelegramController) handleMessage(ctx context.Context, message *telegram.Message) error {
+	if message == nil {
+		return nil
+	}
+	return c.handleTextMessage(ctx, message.Chat.ID, strings.TrimSpace(message.Text), message.MessageID)
+}
+
 func (c *TelegramController) handleCallback(ctx context.Context, chatID int64, data string) error {
+	if handled, err := c.handleWizardCallback(ctx, chatID, data); handled {
+		return err
+	}
 	switch data {
 	case "setup":
 		return c.sendSetup(ctx, chatID)
 	case "status":
 		return c.sendStatus(ctx, chatID)
 	case "master_url":
-		c.setSession(chatID, "master_url")
-		return c.sendMasterURLPrompt(ctx, chatID)
+		return c.sendMasterURLPromptWithPrefix(ctx, chatID, c.beginFlow(chatID, pendingMasterURL, nil))
 	case "use_suggested_master_url":
 		return c.saveSuggestedMasterPublicURL(ctx, chatID)
 	case "cf":
-		return c.sendCloudflareSummary(ctx, chatID)
+		return c.sendCloudflarePanel(ctx, chatID, c.replaceSession(chatID))
 	case "dns":
-		return c.sendDNSSummary(ctx, chatID)
+		return c.sendDNSPanel(ctx, chatID, c.replaceSession(chatID))
 	case "groups":
-		return c.sendGroups(ctx, chatID)
+		return c.sendGroupsPanel(ctx, chatID, c.replaceSession(chatID))
 	case "nodes":
-		return c.sendNodes(ctx, chatID)
+		return c.sendNodesPanel(ctx, chatID, c.replaceSession(chatID))
 	case "policy":
-		return c.Bot.SendMessage(ctx, chatID, policyHelp(), nil)
+		return c.sendPolicyPanel(ctx, chatID, c.replaceSession(chatID))
 	case "agent":
-		return c.Bot.SendMessage(ctx, chatID, agentHelp(), nil)
+		return c.sendAgentPanel(ctx, chatID, c.replaceSession(chatID))
 	case "switch":
 		return c.Bot.SendMessage(ctx, chatID, "手动切换：/switch <分组名> <节点名>", nil)
 	case "help":
@@ -119,12 +133,16 @@ func (c *TelegramController) handleCallback(ctx context.Context, chatID int64, d
 }
 
 func (c *TelegramController) handleText(ctx context.Context, chatID int64, text string) error {
+	return c.handleTextMessage(ctx, chatID, text, 0)
+}
+
+func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64, text string, messageID int64) error {
 	if text == "/cancel" {
 		c.clearSession(chatID)
 		return c.Bot.SendMessage(ctx, chatID, "已取消当前配置。", nil)
 	}
 	if state := c.sessions[chatID]; state != "" && !strings.HasPrefix(text, "/") {
-		return c.handleSession(ctx, chatID, state, text)
+		return c.handlePendingInput(ctx, chatID, state, text, messageID)
 	}
 	if text == "" {
 		return c.sendMenu(ctx, chatID)
@@ -143,20 +161,22 @@ func (c *TelegramController) handleText(ctx context.Context, chatID int64, text 
 		return c.sendSetup(ctx, chatID)
 	case "/config_master_url":
 		if len(parts) >= 2 {
-			c.setSession(chatID, "master_url")
+			c.beginFlow(chatID, pendingMasterURL, nil)
 			return c.saveMasterPublicURL(ctx, chatID, parts[1])
 		}
-		c.setSession(chatID, "master_url")
-		return c.sendMasterURLPrompt(ctx, chatID)
+		return c.sendMasterURLPromptWithPrefix(ctx, chatID, c.beginFlow(chatID, pendingMasterURL, nil))
 	case "/cf":
 		if len(parts) >= 3 {
+			if messageID > 0 {
+				c.tryDeleteMessage(ctx, chatID, messageID)
+			}
 			zoneID := ""
 			if len(parts) >= 4 {
 				zoneID = parts[3]
 			}
 			return c.saveCloudflareConfig(ctx, chatID, parts[1], parts[2], zoneID)
 		}
-		return c.sendCloudflareSummary(ctx, chatID)
+		return c.sendCloudflarePanel(ctx, chatID, c.replaceSession(chatID))
 	case "/groups":
 		return c.handleGroupsCommand(ctx, chatID, parts)
 	case "/nodes":
@@ -175,27 +195,12 @@ func (c *TelegramController) handleText(ctx context.Context, chatID int64, text 
 }
 
 func (c *TelegramController) handleSession(ctx context.Context, chatID int64, state, text string) error {
-	switch state {
-	case "master_url":
-		return c.saveMasterPublicURL(ctx, chatID, text)
-	case "cf":
-		parts := strings.Fields(text)
-		if len(parts) < 2 {
-			return c.Bot.SendMessage(ctx, chatID, "格式错误，请发送：<Cloudflare Token> <Zone Name> [Zone ID]", nil)
-		}
-		zoneID := ""
-		if len(parts) >= 3 {
-			zoneID = parts[2]
-		}
-		return c.saveCloudflareConfig(ctx, chatID, parts[0], parts[1], zoneID)
-	default:
-		return nil
-	}
+	return c.handlePendingInput(ctx, chatID, state, text, 0)
 }
 
 func (c *TelegramController) handleGroupsCommand(ctx context.Context, chatID int64, parts []string) error {
 	if len(parts) == 1 {
-		return c.sendGroups(ctx, chatID)
+		return c.sendGroupsPanel(ctx, chatID, c.replaceSession(chatID))
 	}
 	if len(parts) >= 3 && parts[1] == "add" {
 		if err := ValidateGroupName(parts[2]); err != nil {
@@ -206,14 +211,14 @@ func (c *TelegramController) handleGroupsCommand(ctx context.Context, chatID int
 		if err != nil {
 			return err
 		}
-		return c.Bot.SendMessage(ctx, chatID, "分组已创建："+parts[2], nil)
+		return c.Bot.SendMessage(ctx, chatID, "✅ 分组已创建："+parts[2]+"\n\n下一步：", groupCreatedMenu())
 	}
 	return c.Bot.SendMessage(ctx, chatID, groupsHelp(), nil)
 }
 
 func (c *TelegramController) handleNodesCommand(ctx context.Context, chatID int64, parts []string) error {
 	if len(parts) == 1 {
-		return c.sendNodes(ctx, chatID)
+		return c.sendNodesPanel(ctx, chatID, c.replaceSession(chatID))
 	}
 	if len(parts) >= 5 && parts[1] == "add" {
 		group, err := c.Store.GetGroupByName(ctx, parts[4])
@@ -231,7 +236,7 @@ func (c *TelegramController) handleNodesCommand(ctx context.Context, chatID int6
 			TrafficMode:           policy.DefaultTrafficMode,
 			Enabled:               true,
 			AutoSwitch:            true,
-			Priority:              100,
+			Priority:              defaultNodePriority,
 			PreferredIface:        "auto",
 			ReportIntervalSeconds: policy.AgentReportIntervalSeconds,
 		}
@@ -274,21 +279,21 @@ func (c *TelegramController) handleNodesCommand(ctx context.Context, chatID int6
 		if err != nil {
 			return err
 		}
-		command, expiresAt, missing, err := c.createAgentInstallCommand(ctx, created.ID, policy)
+		_, _, missing, err := c.createAgentInstallCommand(ctx, created.ID, policy)
 		if err != nil {
 			return err
 		}
 		if len(missing) > 0 {
 			return c.Bot.SendMessage(ctx, chatID, "节点已创建："+created.Name+"\n\n生成 Agent 安装命令前还缺少："+strings.Join(missing, "、"), setupMenu())
 		}
-		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("节点已创建：%s\n加入码过期时间：%s\n安装命令：\n%s", created.Name, expiresAt.Format(time.RFC3339), command), nil)
+		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("✅ 节点已创建：%s\n\n下一步：", created.Name), nodeCreatedMenu(created.ID))
 	}
 	return c.Bot.SendMessage(ctx, chatID, nodesHelp(), nil)
 }
 
 func (c *TelegramController) handleDNSCommand(ctx context.Context, chatID int64, parts []string) error {
 	if len(parts) == 1 {
-		return c.sendDNSSummary(ctx, chatID)
+		return c.sendDNSPanel(ctx, chatID, c.replaceSession(chatID))
 	}
 	if len(parts) >= 4 && parts[1] == "set" {
 		group, err := c.Store.GetGroupByName(ctx, parts[2])
@@ -318,7 +323,7 @@ func (c *TelegramController) handleDNSCommand(ctx context.Context, chatID int64,
 		if err != nil {
 			return c.Bot.SendMessage(ctx, chatID, err.Error(), nil)
 		}
-		return c.Bot.SendMessage(ctx, chatID, msg, nil)
+		return c.Bot.SendMessage(ctx, chatID, msg, dnsSavedMenu())
 	}
 	return c.Bot.SendMessage(ctx, chatID, dnsHelp(), nil)
 }
@@ -329,7 +334,7 @@ func (c *TelegramController) handlePolicyCommand(ctx context.Context, chatID int
 		return err
 	}
 	if len(parts) == 1 {
-		return c.Bot.SendMessage(ctx, chatID, db.FormatPolicy(policy)+"\n\n"+policyHelp(), nil)
+		return c.sendPolicyPanel(ctx, chatID, c.replaceSession(chatID))
 	}
 	if len(parts) < 3 || parts[1] != "set" {
 		return c.Bot.SendMessage(ctx, chatID, policyHelp(), nil)
@@ -369,7 +374,7 @@ func (c *TelegramController) handlePolicyCommand(ctx context.Context, chatID int
 	if err := c.Store.SavePolicy(ctx, policy); err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, "策略已更新。\n"+db.FormatPolicy(policy), nil)
+	return c.Bot.SendMessage(ctx, chatID, "策略已更新。\n"+db.FormatPolicy(policy), policySavedMenu())
 }
 
 func (c *TelegramController) handleAgentCommand(ctx context.Context, chatID int64, parts []string) error {
@@ -379,16 +384,16 @@ func (c *TelegramController) handleAgentCommand(ctx context.Context, chatID int6
 			return err
 		}
 		policy, _ := c.Store.GetPolicy(ctx)
-		command, expiresAt, missing, err := c.createAgentInstallCommand(ctx, node.ID, policy)
+		command, _, missing, err := c.createAgentInstallCommand(ctx, node.ID, policy)
 		if err != nil {
 			return err
 		}
 		if len(missing) > 0 {
 			return c.Bot.SendMessage(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(missing, "、"), setupMenu())
 		}
-		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("Agent 安装命令：\n%s\n\n加入码过期时间：%s", command, expiresAt.Format(time.RFC3339)), nil)
+		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("请在节点上执行：\n\n%s\n\njoin code 有效期：30 分钟", command), agentCommandMenu())
 	}
-	return c.Bot.SendMessage(ctx, chatID, agentHelp(), nil)
+	return c.sendAgentPanel(ctx, chatID, c.replaceSession(chatID))
 }
 
 func (c *TelegramController) handleSwitchCommand(ctx context.Context, chatID int64, parts []string) error {
@@ -456,35 +461,19 @@ func (c *TelegramController) sendSetup(ctx context.Context, chatID int64) error 
 }
 
 func (c *TelegramController) sendGroups(ctx context.Context, chatID int64) error {
-	groups, err := BuildGroupDiagnostics(ctx, c.Store, time.Now(), c.DNS)
-	if err != nil {
-		return err
-	}
-	return c.Bot.SendMessage(ctx, chatID, FormatGroupDiagnostics(groups), nil)
+	return c.sendGroupsPanel(ctx, chatID, "")
 }
 
 func (c *TelegramController) sendNodes(ctx context.Context, chatID int64) error {
-	nodes, err := BuildNodeDiagnostics(ctx, c.Store, time.Now())
-	if err != nil {
-		return err
-	}
-	return c.Bot.SendMessage(ctx, chatID, FormatNodeDiagnostics(nodes), nil)
+	return c.sendNodesPanel(ctx, chatID, "")
 }
 
 func (c *TelegramController) sendCloudflareSummary(ctx context.Context, chatID int64) error {
-	summary, err := BuildCloudflareSummary(ctx, c.Store, c.DNS)
-	if err != nil {
-		return err
-	}
-	return c.Bot.SendMessage(ctx, chatID, FormatCloudflareSummary(summary), nil)
+	return c.sendCloudflarePanel(ctx, chatID, "")
 }
 
 func (c *TelegramController) sendDNSSummary(ctx context.Context, chatID int64) error {
-	items, err := BuildDNSSummaries(ctx, c.Store, c.DNS)
-	if err != nil {
-		return err
-	}
-	return c.Bot.SendMessage(ctx, chatID, FormatDNSSummaries(items), nil)
+	return c.sendDNSPanel(ctx, chatID, "")
 }
 
 func mainMenu() *telegram.ReplyMarkup {
@@ -507,15 +496,18 @@ func helpText() string {
 /cf <Token> <Zone Name> [Zone ID]
 /groups add <分组名>
 /dns set <分组名> <A记录> [ttl=120] [proxied=false] [record_id=xxx]
-/nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=100] [enabled=true] [auto_switch=true] [iface=auto]
+/nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=10] [enabled=true] [auto_switch=true] [iface=auto]
 /agent install <节点名>
 /policy set threshold=80 quota=1000GB reset_day=1 mode=both offline=300 auto_switch=true notify_only=false repo=<install-agent-url>
-/switch <分组名> <节点名>`
+/switch <分组名> <节点名>
+/cancel 取消当前向导
+
+推荐优先使用按钮和向导，以上带参数命令适合作为高级用法。`
 }
 
 func groupsHelp() string { return "分组命令：/groups add <分组名>" }
 func nodesHelp() string {
-	return "节点命令：/nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=100] [enabled=true] [auto_switch=true] [iface=auto]"
+	return "节点命令：/nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=10] [enabled=true] [auto_switch=true] [iface=auto]"
 }
 func dnsHelp() string {
 	return "DNS 命令：/dns set <分组名> <A记录> [ttl=120] [proxied=false] [record_id=xxx]"
@@ -603,8 +595,12 @@ func masterURLButton() *telegram.ReplyMarkup {
 }
 
 func (c *TelegramController) sendMasterURLPrompt(ctx context.Context, chatID int64) error {
+	return c.sendMasterURLPromptWithPrefix(ctx, chatID, "")
+}
+
+func (c *TelegramController) sendMasterURLPromptWithPrefix(ctx context.Context, chatID int64, prefix string) error {
 	suggested := c.ensureSuggestedMasterPublicURL(ctx)
-	return c.Bot.SendMessage(ctx, chatID, masterURLHelp(suggested), masterURLPromptMenu(suggested))
+	return c.Bot.SendMessage(ctx, chatID, prefix+masterURLHelp(suggested), masterURLPromptMenu(suggested))
 }
 
 func (c *TelegramController) ensureSuggestedMasterPublicURL(ctx context.Context) string {
@@ -663,11 +659,11 @@ func (c *TelegramController) saveMasterPublicURL(ctx context.Context, chatID int
 		return err
 	}
 	c.clearSession(chatID)
-	msg := "✅ Master 公网地址已保存：\n" + value + "\n\n下一步：配置 Cloudflare：/cf"
+	msg := "✅ Master 公网地址已保存：\n" + value + "\n\n下一步：配置 Cloudflare"
 	if normalized {
 		msg = "检测到你输入的地址未带协议或端口，已自动补全为：\n" + value + "\n\n" + msg
 	}
-	return c.Bot.SendMessage(ctx, chatID, msg, nil)
+	return c.Bot.SendMessage(ctx, chatID, msg, masterSavedMenu())
 }
 
 func (c *TelegramController) saveCloudflareConfig(ctx context.Context, chatID int64, token, zoneName, zoneID string) error {
@@ -695,7 +691,7 @@ func (c *TelegramController) saveCloudflareConfig(ctx context.Context, chatID in
 	}
 	_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "✅ Zone 已验证")
 	_ = c.Store.ClearLastError(ctx, errorKeyCloudflareZone)
-	return c.Bot.SendMessage(ctx, chatID, "Cloudflare 已保存：Token "+config.MaskSecret(token)+"，Zone "+zoneName+"，Zone ID "+zoneID, nil)
+	return c.Bot.SendMessage(ctx, chatID, "✅ Cloudflare 已保存：Token "+config.MaskSecret(token)+"，Zone "+zoneName+"，Zone ID "+zoneID, cloudflareSavedMenu())
 }
 
 func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Group, recordName, recordID string, ttl int, proxied bool) (string, error) {
@@ -783,7 +779,7 @@ func (c *TelegramController) createAgentInstallCommand(ctx context.Context, node
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, err.Error())
 		return "", time.Time{}, nil, err
 	}
-	code, expiresAt, err := c.Store.GenerateJoinCodeWithExpiry(ctx, nodeID, 24*time.Hour)
+	code, expiresAt, err := c.Store.GenerateJoinCodeWithExpiry(ctx, nodeID, 30*time.Minute)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "生成加入码失败")
 		return "", time.Time{}, nil, err
