@@ -72,5 +72,5 @@ func BuildAgentInstallCommand(publicAPIURL, scriptURL, code string) (string, err
 	if IsLocalMasterPublicURL(publicAPIURL) {
 		return "", ErrLocalMasterPublicURL
 	}
-	return fmt.Sprintf("bash <(curl -fsSL %s) --join %s --master %s", scriptURL, code, publicAPIURL), nil
+	return fmt.Sprintf("QDR_MASTER_API_URL=%s bash <(curl -fsSL %s) --join %s", publicAPIURL, scriptURL, code), nil
 }

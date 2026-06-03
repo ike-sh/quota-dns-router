@@ -10,9 +10,8 @@ import (
 	"quota-dns-router-go/internal/agent"
 	"quota-dns-router-go/internal/config"
 	"quota-dns-router-go/internal/traffic"
+	"quota-dns-router-go/internal/version"
 )
-
-const version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -29,19 +28,19 @@ func run(args []string) error {
 	envPath := flagValue(args[1:], "--env", config.DefaultAgentEnvPath)
 	switch cmd {
 	case "run":
-		cfg, err := config.LoadAgent(envPath, version)
+		cfg, err := config.LoadAgent(envPath, version.Version)
 		if err != nil {
 			return err
 		}
 		return agent.NewRunner(cfg).Run(context.Background())
 	case "once":
-		cfg, err := config.LoadAgent(envPath, version)
+		cfg, err := config.LoadAgent(envPath, version.Version)
 		if err != nil {
 			return err
 		}
 		return agent.NewRunner(cfg).Once(context.Background())
 	case "status":
-		cfg, err := config.LoadAgent(envPath, version)
+		cfg, err := config.LoadAgent(envPath, version.Version)
 		if err != nil {
 			return err
 		}
@@ -72,13 +71,13 @@ func run(args []string) error {
 		}
 		fmt.Println("Agent 配置已写入：", envPath)
 	case "config-check":
-		cfg, err := config.LoadAgent(envPath, version)
+		cfg, err := config.LoadAgent(envPath, version.Version)
 		if err != nil {
 			return err
 		}
 		fmt.Println("配置检查通过：", cfg.String())
 	case "version":
-		fmt.Println(version)
+		fmt.Println(version.AgentString())
 	default:
 		printHelp()
 	}

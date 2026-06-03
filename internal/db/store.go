@@ -288,7 +288,7 @@ func DefaultPolicy() Policy {
 		AutoSwitchEnabled:          true,
 		NotifyOnly:                 false,
 		DefaultSwitchCooldownSecs:  600,
-		RepoInstallURL:             "https://raw.githubusercontent.com/OWNER/REPO/main/scripts/install-agent.sh",
+		RepoInstallURL:             "https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh",
 	}
 }
 

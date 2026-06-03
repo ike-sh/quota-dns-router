@@ -11,9 +11,8 @@ import (
 	"quota-dns-router-go/internal/config"
 	"quota-dns-router-go/internal/db"
 	"quota-dns-router-go/internal/master"
+	"quota-dns-router-go/internal/version"
 )
-
-const version = "0.1.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -83,7 +82,7 @@ func run(args []string) error {
 		}
 		fmt.Print(formatMasterConfigCheck(cfg, overview))
 	case "version":
-		fmt.Println(version)
+		fmt.Println(version.MasterString())
 	default:
 		printHelp()
 	}

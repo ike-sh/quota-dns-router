@@ -566,7 +566,7 @@ func normalizeMode(v string) string {
 
 func installURL(policy db.Policy) string {
 	if policy.RepoInstallURL == "" {
-		return "https://raw.githubusercontent.com/OWNER/REPO/main/scripts/install-agent.sh"
+		return "https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh"
 	}
 	return policy.RepoInstallURL
 }
