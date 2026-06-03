@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.7"
+VERSION="0.1.0-alpha.8"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -790,7 +790,7 @@ prompt_source_fallback() {
 
 finish_message() {
   echo "Master 已安装并启动。"
-  echo "下一步：在 Telegram 向 Bot 发送 /start，然后按按钮依次完成 Master 公网地址、Cloudflare、分组、节点、DNS 和 Agent 安装。"
+  echo "下一步：在 Telegram 向 Bot 发送 /start，然后按按钮依次完成 Master 公网地址、Cloudflare、DNS、节点和 Agent 安装。没有分组时，DNS 向导会自动创建 default 分组。"
   if [ -n "$SUGGESTED_PUBLIC_API_URL" ]; then
     echo "检测到公网地址建议："
     echo "$SUGGESTED_PUBLIC_API_URL"
@@ -803,6 +803,10 @@ finish_message() {
   echo "查看日志：journalctl -u quota-dns-router-master -n 100 --no-pager"
   echo "CLI 诊断：qdr-master status"
   echo "配置检查：qdr-master config-check"
+  echo "卸载 Master："
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes"
+  echo "完全清理 Master："
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge"
 }
 
 main() {

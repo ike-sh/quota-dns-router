@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.7"
+VERSION="0.1.0-alpha.8"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -776,6 +776,10 @@ finish_message() {
   echo "可执行：qdr-agent status"
   echo "也可查看：systemctl status quota-dns-router-agent --no-pager -l"
   echo "查看日志：journalctl -u quota-dns-router-agent -n 100 --no-pager"
+  echo "卸载 Agent："
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes"
+  echo "完全清理 Agent："
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes --purge"
 }
 
 main() {

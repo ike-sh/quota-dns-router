@@ -27,6 +27,33 @@ func TestCloudflarePanelShowsButtons(t *testing.T) {
 	}
 }
 
+func TestCallbackUsesEditMessageAndAnswersQuery(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	err := controller.handleUpdate(context.Background(), telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-1",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "help",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.countPath("/answerCallbackQuery") != 1 {
+		t.Fatalf("expected answerCallbackQuery once, got paths=%v", rec.paths)
+	}
+	if rec.countPath("/editMessageText") != 1 {
+		t.Fatalf("expected editMessageText once, got paths=%v", rec.paths)
+	}
+	if rec.countPath("/sendMessage") != 0 {
+		t.Fatalf("did not expect fallback sendMessage, got paths=%v", rec.paths)
+	}
+}
+
 func TestCloudflareTokenCallbackEntersPending(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	if err := controller.handleCallback(context.Background(), 1, "cf_token"); err != nil {
@@ -343,6 +370,32 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 	}
 }
 
+func TestDNSWizardAutoCreatesDefaultGroupWhenMissing(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_add"); err != nil {
+		t.Fatal(err)
+	}
+	group, err := controller.Store.GetGroupByName(ctx, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.Name != "default" {
+		t.Fatalf("unexpected default group: %+v", group)
+	}
+	if controller.sessions[1] != pendingDNSRecordName {
+		t.Fatalf("expected pending dns record prompt, got %q", controller.sessions[1])
+	}
+	for _, want := range []string{"已自动创建默认分组 default", "当前分组：default"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected auto default group hint %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
 func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
 		recordErr:    errors.New("not found"),
@@ -388,6 +441,45 @@ func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
 	for _, want := range []string{"✅ DNS A 记录已创建", "匹配节点：hk-01", "Agent 安装", "agent_node:" + node.ID} {
 		if !rec.contains(want) {
 			t.Fatalf("expected created DNS payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestDNSWizardSavesPendingRecordWhenNoNodes(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		recordErr:    errors.New("not found"),
+		anyRecordErr: errors.New("not found"),
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "hk"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := controller.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RecordName != "hk.example.com" || cfg.RecordID != "" {
+		t.Fatalf("expected pending dns config, got %+v", cfg)
+	}
+	if controller.sessions[1] != "" {
+		t.Fatalf("expected pending flow cleared after saving pending dns")
+	}
+	for _, want := range []string{"待绑定", "添加节点", "查看 DNS 状态"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected pending dns payload to contain %q, got %v", want, rec.payloads)
 		}
 	}
 }
@@ -508,6 +600,60 @@ func TestNodeDetailShowsPolicyActionsAndTroubleshooting(t *testing.T) {
 	}
 }
 
+func TestNodePolicyEditUpdatesSingleField(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_edit_policy:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.contains("修改节点策略：" + node.Name) {
+		t.Fatalf("expected node policy edit panel, got %v", rec.payloads)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_edit_quota:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if controller.sessions[1] != pendingNodeQuota {
+		t.Fatalf("expected pending quota edit, got %q", controller.sessions[1])
+	}
+	if err := controller.handleText(ctx, 1, "2TB"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := controller.Store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.MonthlyQuotaBytes != 2*1024*1024*1024*1024 {
+		t.Fatalf("expected quota updated to 2TB, got %+v", updated)
+	}
+	if updated.ThresholdPercent != 80 || updated.Priority != 10 {
+		t.Fatalf("unexpected collateral policy changes: %+v", updated)
+	}
+	if !rec.contains("月流量已更新") {
+		t.Fatalf("expected update confirmation, got %v", rec.messages)
+	}
+}
+
 func TestPolicyThresholdWizardUpdatesPolicy(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
@@ -572,6 +718,137 @@ func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 		if !rec.contains(want) {
 			t.Fatalf("expected install command payload to contain %q, got %v", want, rec.payloads)
 		}
+	}
+}
+
+func TestAgentWizardCanSendPureCommand(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	if err := controller.Store.SetMasterPublicURL(ctx, "https://master.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.contains("显示纯命令") {
+		t.Fatalf("expected copy button in agent command menu, got %v", rec.payloads)
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := strings.TrimSpace(rec.messages[len(rec.messages)-1])
+	for _, want := range []string{"install-agent.sh", "--join", "--master https://master.example.com"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected pure command to contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
+	updates := []dnsUpdateCall{}
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		record: cloudflare.DNSRecord{
+			ID:      "rec-1",
+			Type:    "A",
+			Name:    "hk.example.com",
+			Content: "1.1.1.1",
+			TTL:     120,
+		},
+		updateCalls: &updates,
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldNode, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newNode, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-02",
+		PublicIP:              "2.2.2.2",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              20,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 120, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.UpdateGroupCurrentNode(ctx, group.ID, oldNode.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "switch_to_node:"+newNode.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.contains("请确认手动切换") {
+		t.Fatalf("expected manual switch confirm page, got %v", rec.payloads)
+	}
+	if err := controller.handleCallback(ctx, 1, "switch_do:"+group.ID+":"+newNode.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected one dns update call, got %+v", updates)
+	}
+	if updates[0].IP != "2.2.2.2" || updates[0].RecordID != "rec-1" {
+		t.Fatalf("unexpected dns update call: %+v", updates[0])
+	}
+	history, err := controller.Store.GetLatestSwitchHistory(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if history.TriggerType != db.SwitchTriggerManual {
+		t.Fatalf("expected manual trigger type, got %+v", history)
+	}
+	if !rec.contains("手动切换完成") {
+		t.Fatalf("expected manual switch success message, got %v", rec.messages)
 	}
 }
 

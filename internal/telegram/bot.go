@@ -146,6 +146,18 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string, markup
 	return b.post(ctx, "/sendMessage", payload)
 }
 
+func (b *Bot) EditMessageText(ctx context.Context, chatID, messageID int64, text string, markup *ReplyMarkup) error {
+	payload := map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+	}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
+	return b.post(ctx, "/editMessageText", payload)
+}
+
 func (b *Bot) SendAdminMessage(ctx context.Context, text string) error {
 	return b.SendMessage(ctx, b.adminID, text, nil)
 }

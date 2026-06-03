@@ -40,6 +40,7 @@ type StatusSwitchSummary struct {
 	NewIP        string
 	OldNode      string
 	NewNode      string
+	TriggerType  string
 	SwitchedAt   time.Time
 	Status       string
 	ErrorMessage string
@@ -242,6 +243,9 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 		add(2, "⚠️ Cloudflare 配置错误："+sanitizeStatusMessage(input.Cloudflare.LastError))
 	}
 	for _, item := range input.DNS {
+		if item.Pending {
+			addPending(fmt.Sprintf("为 %s 绑定 DNS 节点", valueOrDash(item.GroupName)))
+		}
 		if !isBlankOrDash(item.LastError) {
 			add(2, fmt.Sprintf("⚠️ DNS 配置错误[%s]：%s", valueOrDash(item.GroupName), sanitizeStatusMessage(item.LastError)))
 		}
@@ -318,6 +322,7 @@ func FormatRecentSwitchSummary(summary StatusSwitchSummary) string {
 	b.WriteString(fmt.Sprintf("%s %s\n", icon, formatStatusTime(summary.SwitchedAt)))
 	b.WriteString("分组：" + valueOrDash(summary.GroupName) + "\n")
 	b.WriteString("域名：" + valueOrDash(summary.RecordName) + "\n")
+	b.WriteString("触发类型：" + switchTriggerLabel(summary.TriggerType) + "\n")
 	b.WriteString(fmt.Sprintf("%s / %s -> %s / %s", valueOrDash(summary.OldNode), valueOrDash(summary.OldIP), valueOrDash(summary.NewNode), valueOrDash(summary.NewIP)))
 	if summary.ErrorMessage != "" {
 		b.WriteString("\n失败原因：" + sanitizeStatusMessage(summary.ErrorMessage))
@@ -376,6 +381,7 @@ func switchSummaryFromHistory(item db.SwitchHistory) StatusSwitchSummary {
 		NewIP:        item.NewIP,
 		OldNode:      firstNonEmpty(item.FromNodeName, item.FromNodeID),
 		NewNode:      firstNonEmpty(item.ToNodeName, item.ToNodeID),
+		TriggerType:  item.TriggerType,
 		SwitchedAt:   item.SwitchedAt,
 		Status:       item.Status,
 		ErrorMessage: sanitizeStatusMessage(item.ErrorMessage),
@@ -407,6 +413,19 @@ func formatStatusTime(value time.Time) string {
 		return "-"
 	}
 	return value.Local().Format("2006-01-02 15:04:05")
+}
+
+func switchTriggerLabel(triggerType string) string {
+	switch strings.ToLower(strings.TrimSpace(triggerType)) {
+	case db.SwitchTriggerManual:
+		return "手动"
+	case db.SwitchTriggerOffline:
+		return "自动（离线）"
+	case db.SwitchTriggerDisabled:
+		return "自动（禁用）"
+	default:
+		return "自动（阈值）"
+	}
 }
 
 func sanitizeStatusMessage(message string) string {

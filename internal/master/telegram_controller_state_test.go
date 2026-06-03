@@ -165,10 +165,12 @@ func newTestTelegramController(t *testing.T) (*TelegramController, *recordingTel
 type recordingTelegramClient struct {
 	messages []string
 	payloads []string
+	paths    []string
 }
 
 func (c *recordingTelegramClient) Do(req *http.Request) (*http.Response, error) {
 	body, _ := io.ReadAll(req.Body)
+	c.paths = append(c.paths, req.URL.Path)
 	if len(body) > 0 {
 		c.payloads = append(c.payloads, string(body))
 		var payload map[string]any
@@ -194,4 +196,14 @@ func (c *recordingTelegramClient) contains(value string) bool {
 		}
 	}
 	return false
+}
+
+func (c *recordingTelegramClient) countPath(suffix string) int {
+	count := 0
+	for _, path := range c.paths {
+		if strings.HasSuffix(path, suffix) {
+			count++
+		}
+	}
+	return count
 }

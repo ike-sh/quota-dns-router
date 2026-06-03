@@ -36,12 +36,13 @@ type Service struct {
 }
 
 type SwitchDecision struct {
-	Group     db.Group
-	Config    db.CloudflareConfig
-	Current   db.NodeUsage
-	Target    db.NodeUsage
-	Reason    string
-	Triggered bool
+	Group       db.Group
+	Config      db.CloudflareConfig
+	Current     db.NodeUsage
+	Target      db.NodeUsage
+	TriggerType string
+	Reason      string
+	Triggered   bool
 }
 
 func NewService(store *db.Store, notifier TelegramNotifier, dns DNSProvider) *Service {
@@ -139,12 +140,13 @@ func (s *Service) BuildDecision(ctx context.Context, groupID string) (SwitchDeci
 		return SwitchDecision{Group: group, Config: cfg, Current: current, Reason: reason, Triggered: false}, nil
 	}
 	return SwitchDecision{
-		Group:     group,
-		Config:    cfg,
-		Current:   current,
-		Target:    target,
-		Reason:    reason,
-		Triggered: true,
+		Group:       group,
+		Config:      cfg,
+		Current:     current,
+		Target:      target,
+		TriggerType: switchTriggerTypeForReason(reason),
+		Reason:      reason,
+		Triggered:   true,
 	}, nil
 }
 
@@ -252,7 +254,7 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 	if err != nil {
 		_ = s.Store.SetStatusNote(ctx, noteKeyDNSUpdate(decision.Group.ID), "❌ DNS 修改失败")
 		_ = s.Store.SaveLastError(ctx, errorKeyDNSUpdate(decision.Group.ID), err.Error(), cfg.APIToken)
-		_ = s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.Reason, "failed", err.Error(), cfg.APIToken)
+		_ = s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.TriggerType, decision.Reason, "failed", err.Error(), cfg.APIToken)
 		if s.Notifier != nil {
 			msg := switchFailedMessage(decision, err)
 			_ = s.Notifier.SendAdminMessage(ctx, msg)
@@ -265,7 +267,7 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 	}
 	_ = s.Store.SetStatusNote(ctx, noteKeyDNSUpdate(decision.Group.ID), "✅ DNS 修改成功")
 	_ = s.Store.ClearLastError(ctx, errorKeyDNSUpdate(decision.Group.ID))
-	if err := s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.Reason, "success", ""); err != nil {
+	if err := s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.TriggerType, decision.Reason, "success", ""); err != nil {
 		return err
 	}
 	if s.Notifier != nil {
@@ -322,6 +324,17 @@ func switchFailedMessage(d SwitchDecision, err error) string {
 		d.Target.PublicIP,
 		err.Error(),
 	)
+}
+
+func switchTriggerTypeForReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "当前节点离线":
+		return db.SwitchTriggerOffline
+	case "当前节点已禁用", "当前节点不参与自动切换":
+		return db.SwitchTriggerDisabled
+	default:
+		return db.SwitchTriggerThreshold
+	}
 }
 
 func humanBytes(v int64) string {

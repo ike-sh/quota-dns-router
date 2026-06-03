@@ -53,11 +53,17 @@ const (
 	sessionKeyNodeTrafficMode   = "node_traffic_mode"
 	sessionKeyNodeResetDay      = "node_reset_day"
 	sessionKeyNodePriority      = "node_priority"
+	sessionKeyNodeEditField     = "node_edit_field"
 	sessionKeyRecordName        = "record_name"
 	sessionKeyRecordID          = "record_id"
 	sessionKeyCurrentIP         = "current_ip"
 	sessionKeyZoneID            = "zone_id"
 	sessionKeyPolicyField       = "policy_field"
+	nodeEditFieldQuota          = "quota"
+	nodeEditFieldThreshold      = "threshold"
+	nodeEditFieldMode           = "mode"
+	nodeEditFieldResetDay       = "reset_day"
+	nodeEditFieldPriority       = "priority"
 )
 
 type telegramSessionMeta struct {
@@ -87,7 +93,7 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 	case strings.HasPrefix(data, "cf_zone_pick:"):
 		index, err := parseCallbackInt(data, "cf_zone_pick:")
 		if err != nil {
-			return true, c.Bot.SendMessage(ctx, chatID, "Zone 选择已失效，请重新获取 Zone 列表。", cloudflareZoneMenu())
+			return true, c.sendMessageOrEdit(ctx, chatID, "Zone 选择已失效，请重新获取 Zone 列表。", cloudflareZoneMenu())
 		}
 		return true, c.handleCloudflareZonePick(ctx, chatID, index)
 	case data == "dns":
@@ -110,6 +116,34 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 		return true, c.handleDNSRepointToNode(ctx, chatID, nodeID)
 	case data == "dns_keep_current":
 		return true, c.handleDNSKeepCurrent(ctx, chatID)
+	case data == "switch":
+		return true, c.sendSwitchPanel(ctx, chatID, c.replaceSession(chatID))
+	case strings.HasPrefix(data, "switch_group:"):
+		groupID := strings.TrimPrefix(data, "switch_group:")
+		return true, c.sendSwitchTargetMenu(ctx, chatID, groupID, "")
+	case strings.HasPrefix(data, "switch_pick:"):
+		parts := strings.SplitN(strings.TrimPrefix(data, "switch_pick:"), ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "手动切换参数已失效，请重新开始。", mainMenu())
+		}
+		return true, c.sendSwitchConfirm(ctx, chatID, parts[0], parts[1], "")
+	case strings.HasPrefix(data, "switch_do:"):
+		parts := strings.SplitN(strings.TrimPrefix(data, "switch_do:"), ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "手动切换参数已失效，请重新开始。", mainMenu())
+		}
+		decision, err := c.buildManualSwitchDecision(ctx, parts[0], parts[1])
+		if err != nil {
+			return true, c.sendMessageOrEdit(ctx, chatID, err.Error(), mainMenu())
+		}
+		return true, c.executeManualSwitch(ctx, chatID, decision)
+	case strings.HasPrefix(data, "switch_to_node:"):
+		nodeID := strings.TrimPrefix(data, "switch_to_node:")
+		node, err := c.Store.GetNodeByID(ctx, nodeID)
+		if err != nil {
+			return true, c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		}
+		return true, c.sendSwitchConfirm(ctx, chatID, node.GroupID, node.ID, "")
 	case data == "groups":
 		return true, c.sendGroupsPanel(ctx, chatID, c.replaceSession(chatID))
 	case data == "groups_status":
@@ -137,7 +171,28 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 		return true, c.sendNodeDetail(ctx, chatID, nodeID, "")
 	case strings.HasPrefix(data, "nodes_edit_policy:"):
 		nodeID := strings.TrimPrefix(data, "nodes_edit_policy:")
-		return true, c.startNodePolicyEditWizard(ctx, chatID, nodeID)
+		return true, c.sendNodePolicyEditPanel(ctx, chatID, nodeID, "")
+	case strings.HasPrefix(data, "nodes_edit_quota:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_quota:")
+		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldQuota)
+	case strings.HasPrefix(data, "nodes_edit_threshold:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_threshold:")
+		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldThreshold)
+	case strings.HasPrefix(data, "nodes_edit_mode:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_mode:")
+		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldMode)
+	case strings.HasPrefix(data, "nodes_edit_reset_day:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_reset_day:")
+		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldResetDay)
+	case strings.HasPrefix(data, "nodes_edit_priority:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_priority:")
+		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldPriority)
+	case strings.HasPrefix(data, "nodes_edit_toggle_enabled:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_toggle_enabled:")
+		return true, c.toggleNodeEnabledAndShowPolicy(ctx, chatID, nodeID)
+	case strings.HasPrefix(data, "nodes_edit_toggle_auto:"):
+		nodeID := strings.TrimPrefix(data, "nodes_edit_toggle_auto:")
+		return true, c.toggleNodeAutoSwitchAndShowPolicy(ctx, chatID, nodeID)
 	case strings.HasPrefix(data, "nodes_toggle_enabled:"):
 		nodeID := strings.TrimPrefix(data, "nodes_toggle_enabled:")
 		return true, c.toggleNodeEnabled(ctx, chatID, nodeID)
@@ -180,6 +235,11 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 	case strings.HasPrefix(data, "agent_node:"):
 		nodeID := strings.TrimPrefix(data, "agent_node:")
 		return true, c.sendAgentInstallCommand(ctx, chatID, nodeID)
+	case strings.HasPrefix(data, "agent_copy:"):
+		nodeID := strings.TrimPrefix(data, "agent_copy:")
+		return true, c.sendPureAgentInstallCommand(ctx, chatID, nodeID)
+	case strings.HasPrefix(data, "agent_uninstall_copy:"):
+		return true, c.sendPureAgentUninstallCommand(ctx, chatID)
 	case strings.HasPrefix(data, "agent_troubleshoot:"):
 		nodeID := strings.TrimPrefix(data, "agent_troubleshoot:")
 		return true, c.sendAgentTroubleshooting(ctx, chatID, nodeID)
@@ -196,11 +256,11 @@ func (c *TelegramController) handlePendingInput(ctx context.Context, chatID int6
 	case pendingCloudflareZoneName:
 		return c.handleCloudflareZoneNameInput(ctx, chatID, text)
 	case pendingCloudflareZoneSelect:
-		return c.Bot.SendMessage(ctx, chatID, "请点击 Zone 按钮，或选择“手动输入 Zone Name”。", cloudflareZoneChoicesMenu(c.sessionZones(chatID)))
+		return c.sendMessageOrEdit(ctx, chatID, "请点击 Zone 按钮，或选择“手动输入 Zone Name”。", cloudflareZoneChoicesMenu(c.sessionZones(chatID)))
 	case pendingDNSRecordName:
 		return c.handleDNSRecordNameInput(ctx, chatID, text)
 	case pendingDNSFixSelect:
-		return c.Bot.SendMessage(ctx, chatID, "请点击按钮选择 DNS 处理方式。", dnsFixMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "请点击按钮选择 DNS 处理方式。", dnsFixMenu(nil))
 	case pendingGroupName:
 		return c.handleGroupNameInput(ctx, chatID, text)
 	case pendingNodeName:
@@ -212,20 +272,20 @@ func (c *TelegramController) handlePendingInput(ctx context.Context, chatID int6
 	case pendingNodeThreshold:
 		return c.handleNodeThresholdValue(ctx, chatID, text)
 	case pendingNodeModeSelect:
-		return c.Bot.SendMessage(ctx, chatID, "请点击统计模式按钮继续。", nodeTrafficModeMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "请点击统计模式按钮继续。", nodeTrafficModeMenu())
 	case pendingNodeResetDay:
 		return c.handleNodeResetDayValue(ctx, chatID, text)
 	case pendingNodePriority:
 		return c.handleNodePriorityValue(ctx, chatID, text)
 	case pendingNodeConfirm:
 		if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit" {
-			return c.Bot.SendMessage(ctx, chatID, "请点击保存策略或取消。", nodePolicyConfirmMenu())
+			return c.sendMessageOrEdit(ctx, chatID, "请点击保存策略或取消。", nodePolicyConfirmMenu())
 		}
-		return c.Bot.SendMessage(ctx, chatID, "请点击确认创建，或选择修改流量策略/重新填写。", nodeCreateConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "请点击确认创建，或选择修改流量策略/重新填写。", nodeCreateConfirmMenu())
 	case pendingPolicyValue:
 		return c.handlePolicyValueInput(ctx, chatID, text)
 	default:
-		return c.Bot.SendMessage(ctx, chatID, "当前流程已失效，请重新选择操作。", mainMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "当前流程已失效，请重新选择操作。", mainMenu())
 	}
 }
 
@@ -302,12 +362,12 @@ func (c *TelegramController) sendCloudflarePanel(ctx context.Context, chatID int
 	}
 	text += "Zone Name：" + valueOrDash(summary.ZoneName) + "\n"
 	text += "Zone ID：" + valueOrDash(maskMiddle(summary.ZoneID, 4, 4)) + "\n\n请选择操作："
-	return c.Bot.SendMessage(ctx, chatID, text, cloudflarePanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, text, cloudflarePanelMenu())
 }
 
 func (c *TelegramController) sendCloudflareTokenPrompt(ctx context.Context, chatID int64, prefix string) error {
 	text := prefix + "请发送 Cloudflare API Token。\n\n要求：\n- 需要 Zone Read 权限，用于查询 Zone\n- 需要 DNS Edit 权限，用于修改 A 记录\n- Token 只会脱敏显示，不会出现在日志中\n\n发送 /cancel 取消。"
-	return c.Bot.SendMessage(ctx, chatID, text, nil)
+	return c.sendMessageOrEdit(ctx, chatID, text, nil)
 }
 
 func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chatID int64, prefix string) error {
@@ -316,7 +376,7 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 		return err
 	}
 	if strings.TrimSpace(token) == "" {
-		return c.Bot.SendMessage(ctx, chatID, prefix+"请先配置 Cloudflare Token。", cloudflareNeedTokenMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请先配置 Cloudflare Token。", cloudflareNeedTokenMenu())
 	}
 	if c.DNS == nil {
 		prefix += "当前进程未配置 Cloudflare 客户端，请手动输入 Zone Name。\n\n"
@@ -329,7 +389,7 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 		_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "❌ Zone 查询失败")
 		_ = c.Store.SaveLastError(ctx, errorKeyCloudflareZone, msg, token)
 		c.beginFlow(chatID, pendingCloudflareToken, nil)
-		return c.Bot.SendMessage(ctx, chatID, prefix+"查询 Zone 失败："+msg+"\n\n请重新发送 Cloudflare API Token，或发送 /cancel 取消。", cloudflareNeedTokenMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"查询 Zone 失败："+msg+"\n\n请重新发送 Cloudflare API Token，或发送 /cancel 取消。", cloudflareNeedTokenMenu())
 	}
 	sort.Slice(zones, func(i, j int) bool { return zones[i].Name < zones[j].Name })
 	meta := c.ensureSessionMeta(chatID)
@@ -339,17 +399,17 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 	if len(zones) == 1 {
 		title = "检测到 1 个 Zone，是否使用这个 Zone？"
 	}
-	return c.Bot.SendMessage(ctx, chatID, prefix+title, cloudflareZoneChoicesMenu(zones))
+	return c.sendMessageOrEdit(ctx, chatID, prefix+title, cloudflareZoneChoicesMenu(zones))
 }
 
 func (c *TelegramController) sendCloudflareZoneNamePrompt(ctx context.Context, chatID int64, prefix string) error {
-	return c.Bot.SendMessage(ctx, chatID, prefix+"请发送 Zone Name，例如：\nexample.com\n\n发送 /cancel 取消。", nil)
+	return c.sendMessageOrEdit(ctx, chatID, prefix+"请发送 Zone Name，例如：\nexample.com\n\n发送 /cancel 取消。", nil)
 }
 
 func (c *TelegramController) handleCloudflareZonePick(ctx context.Context, chatID int64, index int) error {
 	meta := c.getSessionMeta(chatID)
 	if meta == nil || index < 0 || index >= len(meta.Zones) {
-		return c.Bot.SendMessage(ctx, chatID, "Zone 选择已失效，请重新获取 Zone 列表。", cloudflarePanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "Zone 选择已失效，请重新获取 Zone 列表。", cloudflarePanelMenu())
 	}
 	zone := meta.Zones[index]
 	token, _, _, err := c.Store.GetCloudflareDefaults(ctx)
@@ -362,14 +422,14 @@ func (c *TelegramController) handleCloudflareZonePick(ctx context.Context, chatI
 	_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "✅ Zone 已验证")
 	_ = c.Store.ClearLastError(ctx, errorKeyCloudflareZone)
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("✅ Cloudflare Zone 已保存\n\nZone Name：%s\nZone ID：%s\n\n下一步：配置 DNS A 记录", zone.Name, maskMiddle(zone.ID, 4, 4)), cloudflareSavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, fmt.Sprintf("✅ Cloudflare Zone 已保存\n\nZone Name：%s\nZone ID：%s\n\n下一步：配置 DNS A 记录", zone.Name, maskMiddle(zone.ID, 4, 4)), cloudflareSavedMenu())
 }
 
 func (c *TelegramController) handleCloudflareTokenInput(ctx context.Context, chatID int64, token string, messageID int64) error {
 	token = strings.TrimSpace(token)
 	if token == "" {
 		c.setSession(chatID, pendingCloudflareToken)
-		return c.Bot.SendMessage(ctx, chatID, "❌ Token 不能为空，请重新发送 Cloudflare API Token。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ Token 不能为空，请重新发送 Cloudflare API Token。", nil)
 	}
 	if messageID > 0 {
 		c.tryDeleteMessage(ctx, chatID, messageID)
@@ -383,7 +443,7 @@ func (c *TelegramController) handleCloudflareTokenInput(ctx context.Context, cha
 	}
 	if c.DNS == nil {
 		c.beginFlow(chatID, pendingCloudflareZoneName, nil)
-		return c.Bot.SendMessage(ctx, chatID, "✅ Token 已保存："+config.MaskSecret(token)+"\n\n当前进程未配置 Cloudflare 客户端，请手动输入 Zone Name。", cloudflareZoneMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "✅ Token 已保存："+config.MaskSecret(token)+"\n\n当前进程未配置 Cloudflare 客户端，请手动输入 Zone Name。", cloudflareZoneMenu())
 	}
 	zones, err := c.DNS.ListZones(ctx, token)
 	if err != nil {
@@ -391,7 +451,7 @@ func (c *TelegramController) handleCloudflareTokenInput(ctx context.Context, cha
 		_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "❌ Zone 查询失败")
 		_ = c.Store.SaveLastError(ctx, errorKeyCloudflareZone, msg, token)
 		c.setSession(chatID, pendingCloudflareToken)
-		return c.Bot.SendMessage(ctx, chatID, "✅ Token 已保存："+config.MaskSecret(token)+"\n\n查询 Zone 失败："+msg+"\n\n请重新发送 Cloudflare API Token，或发送 /cancel 取消。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "✅ Token 已保存："+config.MaskSecret(token)+"\n\n查询 Zone 失败："+msg+"\n\n请重新发送 Cloudflare API Token，或发送 /cancel 取消。", nil)
 	}
 	sort.Slice(zones, func(i, j int) bool { return zones[i].Name < zones[j].Name })
 	meta := c.ensureSessionMeta(chatID)
@@ -401,14 +461,14 @@ func (c *TelegramController) handleCloudflareTokenInput(ctx context.Context, cha
 	if len(zones) == 1 {
 		text = "✅ Token 已保存：" + config.MaskSecret(token) + "\n\n检测到 1 个 Zone，是否使用这个 Zone？"
 	}
-	return c.Bot.SendMessage(ctx, chatID, text, cloudflareZoneChoicesMenu(zones))
+	return c.sendMessageOrEdit(ctx, chatID, text, cloudflareZoneChoicesMenu(zones))
 }
 
 func (c *TelegramController) handleCloudflareZoneNameInput(ctx context.Context, chatID int64, zoneName string) error {
 	zoneName = strings.TrimSpace(zoneName)
 	if zoneName == "" {
 		c.setSession(chatID, pendingCloudflareZoneName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ Zone Name 不能为空，请重新发送。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ Zone Name 不能为空，请重新发送。", nil)
 	}
 	token, _, _, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
@@ -416,11 +476,11 @@ func (c *TelegramController) handleCloudflareZoneNameInput(ctx context.Context, 
 	}
 	if strings.TrimSpace(token) == "" {
 		c.beginFlow(chatID, pendingCloudflareToken, nil)
-		return c.Bot.SendMessage(ctx, chatID, "请先配置 Cloudflare Token。", cloudflareNeedTokenMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "请先配置 Cloudflare Token。", cloudflareNeedTokenMenu())
 	}
 	if c.DNS == nil {
 		c.setSession(chatID, pendingCloudflareZoneName)
-		return c.Bot.SendMessage(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法自动查询 Zone ID。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法自动查询 Zone ID。", nil)
 	}
 	zoneID, err := c.DNS.LookupZoneID(ctx, token, zoneName)
 	if err != nil {
@@ -428,7 +488,7 @@ func (c *TelegramController) handleCloudflareZoneNameInput(ctx context.Context, 
 		_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "❌ Zone 查询失败")
 		_ = c.Store.SaveLastError(ctx, errorKeyCloudflareZone, msg, token)
 		c.setSession(chatID, pendingCloudflareZoneName)
-		return c.Bot.SendMessage(ctx, chatID, "查询 Zone 失败："+msg+"\n\n请重新发送 Zone Name，或发送 /cancel 取消。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "查询 Zone 失败："+msg+"\n\n请重新发送 Zone Name，或发送 /cancel 取消。", nil)
 	}
 	if err := c.Store.SaveCloudflareDefaults(ctx, token, zoneName, zoneID); err != nil {
 		return err
@@ -436,7 +496,7 @@ func (c *TelegramController) handleCloudflareZoneNameInput(ctx context.Context, 
 	_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "✅ Zone 已验证")
 	_ = c.Store.ClearLastError(ctx, errorKeyCloudflareZone)
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("✅ Cloudflare Zone 已保存\n\nZone Name：%s\nZone ID：%s\n\n下一步：配置 DNS A 记录", zoneName, maskMiddle(zoneID, 4, 4)), cloudflareSavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, fmt.Sprintf("✅ Cloudflare Zone 已保存\n\nZone Name：%s\nZone ID：%s\n\n下一步：配置 DNS A 记录", zoneName, maskMiddle(zoneID, 4, 4)), cloudflareSavedMenu())
 }
 
 func (c *TelegramController) sendDNSPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -455,7 +515,7 @@ func (c *TelegramController) sendDNSPanel(ctx context.Context, chatID int64, pre
 		text += "建议：先为分组添加第一条 DNS A 记录，再继续生成 Agent 安装命令。\n"
 	}
 	text += "\n请选择操作："
-	return c.Bot.SendMessage(ctx, chatID, text, dnsPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, text, dnsPanelMenu())
 }
 
 func (c *TelegramController) sendDNSStatus(ctx context.Context, chatID int64) error {
@@ -463,7 +523,7 @@ func (c *TelegramController) sendDNSStatus(ctx context.Context, chatID int64) er
 	if err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, FormatDNSSummaries(items), dnsPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, FormatDNSSummaries(items), dnsPanelMenu())
 }
 
 func (c *TelegramController) startDNSWizard(ctx context.Context, chatID int64, prefix string) error {
@@ -472,23 +532,31 @@ func (c *TelegramController) startDNSWizard(ctx context.Context, chatID int64, p
 		return err
 	}
 	if strings.TrimSpace(token) == "" || strings.TrimSpace(zoneName) == "" {
-		return c.Bot.SendMessage(ctx, chatID, prefix+"请先完成 Cloudflare Token 和 Zone 配置。", cloudflareSavedMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请先完成 Cloudflare Token 和 Zone 配置。", cloudflareSavedMenu())
 	}
 	groups, err := c.Store.ListGroups(ctx)
 	if err != nil {
 		return err
 	}
 	if len(groups) == 0 {
-		return c.Bot.SendMessage(ctx, chatID, prefix+"还没有分组。请先创建分组。", dnsNoGroupMenu())
+		group, groupErr := c.ensureDefaultGroup(ctx)
+		if groupErr != nil {
+			return groupErr
+		}
+		return c.startDNSRecordPromptWithPrefix(ctx, chatID, group, prefix+"已自动创建默认分组 default。\n\n")
 	}
-	return c.Bot.SendMessage(ctx, chatID, prefix+"请选择要绑定 DNS 的分组：", dnsGroupMenu(groups))
+	return c.sendMessageOrEdit(ctx, chatID, prefix+"请选择要绑定 DNS 的分组：", dnsGroupMenu(groups))
 }
 
 func (c *TelegramController) startDNSRecordPrompt(ctx context.Context, chatID int64, groupID string) error {
 	group, err := c.Store.GetGroupByID(ctx, groupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "分组不存在，请重新选择。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请重新选择。", dnsPanelMenu())
 	}
+	return c.startDNSRecordPromptWithPrefix(ctx, chatID, group, "")
+}
+
+func (c *TelegramController) startDNSRecordPromptWithPrefix(ctx context.Context, chatID int64, group db.Group, prefix string) error {
 	_, zoneName, _, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
 		return err
@@ -501,18 +569,19 @@ func (c *TelegramController) startDNSRecordPrompt(ctx context.Context, chatID in
 	text += "hk." + zoneName + "\n"
 	text += "或只输入子域名前缀：\n"
 	text += "hk\n\n"
+	text += "当前分组：" + group.Name + "\n"
 	text += "当前 Zone：" + valueOrDash(zoneName) + "\n\n发送 /cancel 取消。"
-	return c.Bot.SendMessage(ctx, chatID, text, nil)
+	return c.sendMessageOrEdit(ctx, chatID, prefix+text, nil)
 }
 
 func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatID int64, text string) error {
 	groupID := c.currentSessionValue(chatID, sessionKeyGroupID)
 	if groupID == "" {
-		return c.Bot.SendMessage(ctx, chatID, "分组信息已失效，请重新开始 DNS 配置。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "分组信息已失效，请重新开始 DNS 配置。", dnsPanelMenu())
 	}
 	group, err := c.Store.GetGroupByID(ctx, groupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "分组不存在，请重新开始 DNS 配置。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请重新开始 DNS 配置。", dnsPanelMenu())
 	}
 	token, zoneName, zoneID, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
@@ -521,13 +590,13 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 	recordName := normalizeDNSRecordName(text, zoneName)
 	if recordName == "" {
 		c.setSession(chatID, pendingDNSRecordName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 记录名不能为空，请重新发送。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 记录名不能为空，请重新发送。", nil)
 	}
 	if strings.TrimSpace(zoneID) == "" && c.DNS != nil {
 		foundZoneID, lookupErr := c.DNS.LookupZoneID(ctx, token, zoneName)
 		if lookupErr != nil {
 			c.setSession(chatID, pendingDNSRecordName)
-			return c.Bot.SendMessage(ctx, chatID, "❌ 查询 Zone ID 失败："+friendlyCloudflareError(lookupErr), nil)
+			return c.sendMessageOrEdit(ctx, chatID, "❌ 查询 Zone ID 失败："+friendlyCloudflareError(lookupErr), nil)
 		}
 		zoneID = foundZoneID
 		if err := c.Store.SaveCloudflareDefaults(ctx, token, zoneName, zoneID); err != nil {
@@ -538,7 +607,7 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 	c.setSessionValue(chatID, sessionKeyZoneID, zoneID)
 	if c.DNS == nil || strings.TrimSpace(zoneID) == "" {
 		c.setSession(chatID, pendingDNSRecordName)
-		return c.Bot.SendMessage(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法自动查询 DNS 记录。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法自动查询 DNS 记录。", nil)
 	}
 	record, err := c.DNS.LookupDNSRecord(ctx, token, zoneID, recordName)
 	if err == nil {
@@ -566,7 +635,7 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 		if matchedNodeID != "" {
 			c.clearSession(chatID)
 			text := formatDNSSavedMessage(group.Name, cfg.RecordName, record.Content, matchedNodeName, false)
-			return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu(matchedNodeID))
+			return c.sendMessageOrEdit(ctx, chatID, text, dnsSavedMenu(matchedNodeID))
 		}
 		c.setSessionValue(chatID, sessionKeyRecordName, cfg.RecordName)
 		c.setSessionValue(chatID, sessionKeyRecordID, record.ID)
@@ -574,47 +643,54 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 		c.setSessionValue(chatID, sessionKeyZoneID, zoneID)
 		c.setSession(chatID, pendingDNSFixSelect)
 		text := fmt.Sprintf("当前 DNS %s 解析到 %s，\n但没有匹配任何已配置节点。\n\n请选择：", cfg.RecordName, record.Content)
-		return c.Bot.SendMessage(ctx, chatID, text, dnsFixMenu(nodes))
+		return c.sendMessageOrEdit(ctx, chatID, text, dnsFixMenu(nodes))
 	}
 	if any, anyErr := c.DNS.LookupDNSRecordAnyType(ctx, token, zoneID, recordName); anyErr == nil {
 		msg := fmt.Sprintf("当前记录类型为 %s，不支持。请改为 A 记录后重试。", any.Type)
 		_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 记录类型错误")
 		_ = c.Store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, token)
 		c.setSession(chatID, pendingDNSRecordName)
-		return c.Bot.SendMessage(ctx, chatID, msg, nil)
+		return c.sendMessageOrEdit(ctx, chatID, msg, nil)
 	}
 	nodes, err := c.Store.ListNodesByGroupID(ctx, group.ID)
 	if err != nil {
 		return err
 	}
 	if len(nodes) == 0 {
-		c.setSession(chatID, pendingDNSRecordName)
-		return c.Bot.SendMessage(ctx, chatID, "DNS 记录不存在，但当前分组没有节点，无法确定初始 IP。\n\n请先添加节点。", dnsNeedNodeMenu())
+		cfg, saveErr := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, "", defaultDNSRecordTTL, defaultDNSRecordProxied, true)
+		if saveErr != nil {
+			return saveErr
+		}
+		_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(group.ID), "⏳ 已保存记录名，等待绑定节点")
+		_ = c.Store.ClearLastError(ctx, errorKeyDNSLookup(group.ID))
+		_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
+		c.clearSession(chatID)
+		return c.sendMessageOrEdit(ctx, chatID, formatDNSPendingMessage(group.Name, cfg.RecordName), dnsPendingMenu())
 	}
 	c.setSession(chatID, pendingDNSRecordName)
-	return c.Bot.SendMessage(ctx, chatID, "记录 "+recordName+" 不存在。\n\n请选择初始解析到哪个节点：", dnsNodeMenu(nodes))
+	return c.sendMessageOrEdit(ctx, chatID, "记录 "+recordName+" 不存在。\n\n请选择初始解析到哪个节点：", dnsNodeMenu(nodes))
 }
 
 func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID int64, nodeID string) error {
 	groupID := c.currentSessionValue(chatID, sessionKeyGroupID)
 	recordName := c.currentSessionValue(chatID, sessionKeyRecordName)
 	if groupID == "" || recordName == "" {
-		return c.Bot.SendMessage(ctx, chatID, "DNS 创建流程已失效，请重新开始。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "DNS 创建流程已失效，请重新开始。", dnsPanelMenu())
 	}
 	group, err := c.Store.GetGroupByID(ctx, groupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "分组不存在，请重新开始。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请重新开始。", dnsPanelMenu())
 	}
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", dnsPanelMenu())
 	}
 	token, _, zoneID, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
 		return err
 	}
 	if c.DNS == nil || strings.TrimSpace(zoneID) == "" {
-		return c.Bot.SendMessage(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法创建 DNS 记录。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法创建 DNS 记录。", dnsPanelMenu())
 	}
 	record, err := c.DNS.CreateDNSRecord(ctx, token, zoneID, recordName, node.PublicIP, defaultDNSRecordTTL, defaultDNSRecordProxied)
 	if err != nil {
@@ -622,7 +698,7 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 		_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(group.ID), "❌ DNS 创建失败")
 		_ = c.Store.SaveLastError(ctx, errorKeyDNSUpdate(group.ID), msg, token)
 		c.setSession(chatID, pendingDNSRecordName)
-		return c.Bot.SendMessage(ctx, chatID, "创建 DNS 记录失败："+msg, nil)
+		return c.sendMessageOrEdit(ctx, chatID, "创建 DNS 记录失败："+msg, nil)
 	}
 	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, defaultDNSRecordTTL, defaultDNSRecordProxied, true)
 	if err != nil {
@@ -635,7 +711,7 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
 	c.clearSession(chatID)
 	text := formatDNSSavedMessage(group.Name, cfg.RecordName, node.PublicIP, node.Name, true)
-	return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu(node.ID))
+	return c.sendMessageOrEdit(ctx, chatID, text, dnsSavedMenu(node.ID))
 }
 
 func (c *TelegramController) handleDNSRepointToNode(ctx context.Context, chatID int64, nodeID string) error {
@@ -644,14 +720,14 @@ func (c *TelegramController) handleDNSRepointToNode(ctx context.Context, chatID 
 	recordID := c.currentSessionValue(chatID, sessionKeyRecordID)
 	currentIP := c.currentSessionValue(chatID, sessionKeyCurrentIP)
 	if groupID == "" || recordName == "" || recordID == "" {
-		return c.Bot.SendMessage(ctx, chatID, "DNS 修正流程已失效，请重新开始。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "DNS 修正流程已失效，请重新开始。", dnsPanelMenu())
 	}
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", dnsPanelMenu())
 	}
 	if node.GroupID != groupID {
-		return c.Bot.SendMessage(ctx, chatID, "节点不属于当前分组，请重新选择。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "节点不属于当前分组，请重新选择。", dnsPanelMenu())
 	}
 	cfg, err := c.Store.GetCloudflareConfigByGroupID(ctx, groupID)
 	if err != nil {
@@ -659,14 +735,14 @@ func (c *TelegramController) handleDNSRepointToNode(ctx context.Context, chatID 
 	}
 	nodes, _ := c.Store.ListNodesByGroupID(ctx, groupID)
 	if c.DNS == nil || strings.TrimSpace(cfg.ZoneID) == "" || strings.TrimSpace(cfg.APIToken) == "" {
-		return c.Bot.SendMessage(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法修正 DNS 记录。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法修正 DNS 记录。", dnsPanelMenu())
 	}
 	if err := c.DNS.UpdateDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, recordID, recordName, node.PublicIP, cfg.TTL, cfg.Proxied); err != nil {
 		msg := friendlyCloudflareError(err)
 		_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(groupID), "❌ DNS 修改失败")
 		_ = c.Store.SaveLastError(ctx, errorKeyDNSUpdate(groupID), msg, cfg.APIToken)
 		c.setSession(chatID, pendingDNSFixSelect)
-		return c.Bot.SendMessage(ctx, chatID, "修正 DNS 记录失败："+msg, dnsFixMenu(nodes))
+		return c.sendMessageOrEdit(ctx, chatID, "修正 DNS 记录失败："+msg, dnsFixMenu(nodes))
 	}
 	_ = c.Store.UpdateGroupCurrentNode(ctx, groupID, node.ID)
 	_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(groupID), "✅ DNS 记录查询成功")
@@ -675,7 +751,7 @@ func (c *TelegramController) handleDNSRepointToNode(ctx context.Context, chatID 
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(groupID))
 	c.clearSession(chatID)
 	text := fmt.Sprintf("✅ DNS A 记录已更新\n\n域名：%s\n旧 IP：%s\n新 IP：%s\n匹配节点：%s\n\n下一步：安装 Agent", recordName, valueOrDash(currentIP), node.PublicIP, node.Name)
-	return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu(node.ID))
+	return c.sendMessageOrEdit(ctx, chatID, text, dnsSavedMenu(node.ID))
 }
 
 func (c *TelegramController) handleDNSKeepCurrent(ctx context.Context, chatID int64) error {
@@ -683,7 +759,84 @@ func (c *TelegramController) handleDNSKeepCurrent(ctx context.Context, chatID in
 	recordName := c.currentSessionValue(chatID, sessionKeyRecordName)
 	currentIP := c.currentSessionValue(chatID, sessionKeyCurrentIP)
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, formatDNSSavedMessage(groupName, recordName, currentIP, "", false), dnsSavedMenu(""))
+	return c.sendMessageOrEdit(ctx, chatID, formatDNSSavedMessage(groupName, recordName, currentIP, "", false), dnsSavedMenu(""))
+}
+
+func (c *TelegramController) sendSwitchPanel(ctx context.Context, chatID int64, prefix string) error {
+	groups, err := c.Store.ListGroups(ctx)
+	if err != nil {
+		return err
+	}
+	var ready []db.Group
+	for _, group := range groups {
+		cfg, cfgErr := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
+		if cfgErr == nil && strings.TrimSpace(cfg.RecordName) != "" {
+			ready = append(ready, group)
+		}
+	}
+	if len(ready) == 0 {
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"还没有可手动切换的 DNS 记录，请先完成 DNS 配置。", dnsPanelMenu())
+	}
+	return c.sendMessageOrEdit(ctx, chatID, prefix+"🔀 手动切换\n\n请选择要切换的分组：", switchGroupMenu(ready))
+}
+
+func (c *TelegramController) sendSwitchTargetMenu(ctx context.Context, chatID int64, groupID, prefix string) error {
+	group, err := c.Store.GetGroupByID(ctx, groupID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请重新选择。", mainMenu())
+	}
+	cfg, err := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
+	if err != nil || strings.TrimSpace(cfg.RecordName) == "" {
+		return c.sendMessageOrEdit(ctx, chatID, "当前分组还没有 DNS A 记录，请先完成 DNS 配置。", dnsPanelMenu())
+	}
+	if strings.TrimSpace(cfg.RecordID) == "" {
+		return c.sendMessageOrEdit(ctx, chatID, "当前分组的 DNS 记录还处于待绑定状态，请先在 DNS 面板绑定到节点。", dnsPanelMenu())
+	}
+	nodes, err := c.Store.ListNodes(ctx)
+	if err != nil {
+		return err
+	}
+	var groupNodes []db.NodeWithGroup
+	for _, node := range nodes {
+		if node.GroupID == group.ID {
+			groupNodes = append(groupNodes, node)
+		}
+	}
+	if len(groupNodes) == 0 {
+		return c.sendMessageOrEdit(ctx, chatID, "当前分组还没有节点，请先添加节点。", dnsNeedNodeMenu())
+	}
+	currentNode := "-"
+	currentIP := "-"
+	usages, usageErr := c.Store.ListNodeUsagesByGroup(ctx, group.ID, timeNow())
+	if usageErr == nil && len(usages) > 0 && c.DNS != nil {
+		service := Service{Store: c.Store, DNS: c.DNS, Now: timeNow}
+		if current, resolveErr := service.ResolveCurrentNode(ctx, group, cfg, usages); resolveErr == nil {
+			currentNode = current.Name
+			currentIP = current.PublicIP
+		}
+	}
+	text := fmt.Sprintf("%s🔀 手动切换\n\n当前 DNS：%s -> %s / %s\n\n请选择要切换到的节点：", prefix, cfg.RecordName, valueOrDash(currentNode), valueOrDash(currentIP))
+	return c.sendMessageOrEdit(ctx, chatID, text, switchTargetMenu(group.ID, groupNodes))
+}
+
+func (c *TelegramController) sendSwitchConfirm(ctx context.Context, chatID int64, groupID, nodeID, prefix string) error {
+	decision, err := c.buildManualSwitchDecision(ctx, groupID, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, err.Error(), mainMenu())
+	}
+	text := prefix + fmt.Sprintf(
+		"请确认手动切换：\n\n域名：%s\n旧节点：%s\n旧 IP：%s\n新节点：%s\n新 IP：%s",
+		valueOrDash(decision.Config.RecordName),
+		valueOrDash(decision.Current.Name),
+		valueOrDash(decision.Current.PublicIP),
+		valueOrDash(decision.Target.Name),
+		valueOrDash(decision.Target.PublicIP),
+	)
+	if decision.Current.ID != "" && decision.Current.ID == decision.Target.ID {
+		text = "当前 DNS 已经指向这个节点，无需再次切换。"
+		return c.sendMessageOrEdit(ctx, chatID, text, manualSwitchDoneMenu(decision.Target.ID))
+	}
+	return c.sendMessageOrEdit(ctx, chatID, text, manualSwitchConfirmMenu(groupID, nodeID))
 }
 
 func (c *TelegramController) sendGroupsPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -692,7 +845,22 @@ func (c *TelegramController) sendGroupsPanel(ctx context.Context, chatID int64, 
 		return err
 	}
 	text := fmt.Sprintf("%s📦 分组管理\n\n当前分组：%d\n\n请选择操作：", prefix, count)
-	return c.Bot.SendMessage(ctx, chatID, text, groupsPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, text, groupsPanelMenu())
+}
+
+func (c *TelegramController) ensureDefaultGroup(ctx context.Context) (db.Group, error) {
+	policy, err := c.Store.GetPolicy(ctx)
+	if err != nil {
+		return db.Group{}, err
+	}
+	group, err := c.Store.CreateGroup(ctx, "default", policy.DefaultSwitchCooldownSecs)
+	if err == nil {
+		return group, nil
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "unique") {
+		return c.Store.GetGroupByName(ctx, "default")
+	}
+	return db.Group{}, err
 }
 
 func (c *TelegramController) sendGroupsStatus(ctx context.Context, chatID int64) error {
@@ -700,19 +868,19 @@ func (c *TelegramController) sendGroupsStatus(ctx context.Context, chatID int64)
 	if err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, FormatGroupDiagnostics(items), groupsPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, FormatGroupDiagnostics(items), groupsPanelMenu())
 }
 
 func (c *TelegramController) sendGroupNamePrompt(ctx context.Context, chatID int64, prefix string) error {
 	text := prefix + "请发送分组名，例如：\nhk\nsg\nus\n\n发送 /cancel 取消。"
-	return c.Bot.SendMessage(ctx, chatID, text, nil)
+	return c.sendMessageOrEdit(ctx, chatID, text, nil)
 }
 
 func (c *TelegramController) handleGroupNameInput(ctx context.Context, chatID int64, groupName string) error {
 	groupName = strings.TrimSpace(groupName)
 	if err := ValidateGroupName(groupName); err != nil {
 		c.setSession(chatID, pendingGroupName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送分组名。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送分组名。", nil)
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
@@ -720,10 +888,10 @@ func (c *TelegramController) handleGroupNameInput(ctx context.Context, chatID in
 	}
 	if _, err := c.Store.CreateGroup(ctx, groupName, policy.DefaultSwitchCooldownSecs); err != nil {
 		c.setSession(chatID, pendingGroupName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 创建分组失败："+err.Error()+"\n\n请换一个分组名重试。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 创建分组失败："+err.Error()+"\n\n请换一个分组名重试。", nil)
 	}
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, "✅ 分组已创建："+groupName+"\n\n下一步：", groupCreatedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "✅ 分组已创建："+groupName+"\n\n下一步：", groupCreatedMenu())
 }
 
 func (c *TelegramController) sendNodesPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -732,7 +900,7 @@ func (c *TelegramController) sendNodesPanel(ctx context.Context, chatID int64, p
 		return err
 	}
 	text := fmt.Sprintf("%s🖥 节点管理\n\n当前节点：%d\n\n请选择操作，或直接点开某个节点查看详情：", prefix, len(nodes))
-	return c.Bot.SendMessage(ctx, chatID, text, nodesPanelMenu(nodes))
+	return c.sendMessageOrEdit(ctx, chatID, text, nodesPanelMenu(nodes))
 }
 
 func (c *TelegramController) sendNodesStatus(ctx context.Context, chatID int64) error {
@@ -740,7 +908,7 @@ func (c *TelegramController) sendNodesStatus(ctx context.Context, chatID int64) 
 	if err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, FormatNodeDiagnostics(items), nodesPanelMenu(nil))
+	return c.sendMessageOrEdit(ctx, chatID, FormatNodeDiagnostics(items), nodesPanelMenu(nil))
 }
 
 func (c *TelegramController) startNodeWizard(ctx context.Context, chatID int64, prefix string) error {
@@ -749,37 +917,37 @@ func (c *TelegramController) startNodeWizard(ctx context.Context, chatID int64, 
 		return err
 	}
 	if len(groups) == 0 {
-		return c.Bot.SendMessage(ctx, chatID, prefix+"还没有分组，请先创建分组。", nodesNeedGroupMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"还没有分组，请先创建分组。", nodesNeedGroupMenu())
 	}
-	return c.Bot.SendMessage(ctx, chatID, prefix+"请选择节点所属分组：", nodesGroupMenu(groups))
+	return c.sendMessageOrEdit(ctx, chatID, prefix+"请选择节点所属分组：", nodesGroupMenu(groups))
 }
 
 func (c *TelegramController) startNodeNamePrompt(ctx context.Context, chatID int64, groupID string) error {
 	group, err := c.Store.GetGroupByID(ctx, groupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "分组不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	c.beginFlow(chatID, pendingNodeName, map[string]string{
 		sessionKeyGroupID:   group.ID,
 		sessionKeyGroupName: group.Name,
 		sessionKeyNodeFlow:  "create",
 	})
-	return c.Bot.SendMessage(ctx, chatID, "请发送节点名称，例如：\nhk-01\n\n发送 /cancel 取消。", nil)
+	return c.sendMessageOrEdit(ctx, chatID, "请发送节点名称，例如：\nhk-01\n\n发送 /cancel 取消。", nil)
 }
 
 func (c *TelegramController) handleNodeNameInput(ctx context.Context, chatID int64, nodeName string) error {
 	nodeName = strings.TrimSpace(nodeName)
 	if nodeName == "" {
 		c.setSession(chatID, pendingNodeName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 节点名称不能为空，请重新发送。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 节点名称不能为空，请重新发送。", nil)
 	}
 	if _, err := c.Store.GetNodeByName(ctx, nodeName); err == nil {
 		c.setSession(chatID, pendingNodeName)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 节点名称已存在，请换一个名称。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 节点名称已存在，请换一个名称。", nil)
 	}
 	c.setSessionValue(chatID, sessionKeyNodeName, nodeName)
 	c.setSession(chatID, pendingNodeIP)
-	return c.Bot.SendMessage(ctx, chatID, "请发送节点公网 IP。\n\n要求：\n- 仅支持 IPv4\n- 不允许私网 IP、localhost、127.0.0.1\n\n发送 /cancel 取消。", nil)
+	return c.sendMessageOrEdit(ctx, chatID, "请发送节点公网 IP。\n\n要求：\n- 仅支持 IPv4\n- 不允许私网 IP、localhost、127.0.0.1\n\n发送 /cancel 取消。", nil)
 }
 
 func (c *TelegramController) handleNodeIPInput(ctx context.Context, chatID int64, ipText string) error {
@@ -790,7 +958,7 @@ func (c *TelegramController) handleNodeIPInput(ctx context.Context, chatID int64
 	ipText = strings.TrimSpace(ipText)
 	if err := ValidatePublicIPv4(ipText); err != nil {
 		c.setSession(chatID, pendingNodeIP)
-		return c.Bot.SendMessage(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送公网 IPv4。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送公网 IPv4。", nil)
 	}
 	c.setSessionValue(chatID, sessionKeyNodeIP, ipText)
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "default")
@@ -800,29 +968,52 @@ func (c *TelegramController) handleNodeIPInput(ctx context.Context, chatID int64
 	c.setSessionValue(chatID, sessionKeyNodeResetDay, strconv.Itoa(policy.DefaultResetDay))
 	c.setSessionValue(chatID, sessionKeyNodePriority, strconv.Itoa(defaultNodePriority))
 	c.setSession(chatID, pendingNodeConfirm)
-	return c.Bot.SendMessage(ctx, chatID, c.buildNodeConfirmText(chatID), nodeCreateConfirmMenu())
+	return c.sendMessageOrEdit(ctx, chatID, c.buildNodeConfirmText(chatID), nodeCreateConfirmMenu())
 }
 
 func (c *TelegramController) startNodePolicyPrompt(ctx context.Context, chatID int64) error {
 	if c.currentSessionValue(chatID, sessionKeyNodeName) == "" || c.currentSessionValue(chatID, sessionKeyGroupID) == "" {
-		return c.Bot.SendMessage(ctx, chatID, "节点配置流程已失效，请重新开始。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点配置流程已失效，请重新开始。", nodesPanelMenu(nil))
 	}
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
 	c.setSession(chatID, pendingNodeQuota)
-	return c.Bot.SendMessage(ctx, chatID, "请发送月流量，例如：500GB、1TB、1000GB。\n\n可直接点击默认值。", nodeQuotaMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请发送月流量，例如：500GB、1TB、1000GB。\n\n可直接点击默认值。", nodeQuotaMenu())
 }
 
 func (c *TelegramController) startNodePolicyEditWizard(ctx context.Context, chatID int64, nodeID string) error {
+	return c.sendNodePolicyEditPanel(ctx, chatID, nodeID, "")
+}
+
+func (c *TelegramController) sendNodePolicyEditPanel(ctx context.Context, chatID int64, nodeID, prefix string) error {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	text := prefix + fmt.Sprintf(
+		"修改节点策略：%s\n\n当前：\n月流量：%s\n阈值：%d%%\n统计：%s\n重置日：%d\n优先级：%d\n启用：%t\n自动切换：%t\n\n请选择要修改的项目：",
+		node.Name,
+		formatNodeQuota(strconv.FormatInt(node.MonthlyQuotaBytes, 10)),
+		node.ThresholdPercent,
+		modeLabel(node.TrafficMode),
+		node.ResetDay,
+		node.Priority,
+		node.Enabled,
+		node.AutoSwitch,
+	)
+	return c.sendMessageOrEdit(ctx, chatID, text, nodePolicyEditMenu(node))
+}
+
+func (c *TelegramController) startNodePolicyFieldEdit(ctx context.Context, chatID int64, nodeID, field string) error {
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	group, err := c.Store.GetGroupByID(ctx, node.GroupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点所属分组不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点所属分组不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	c.beginFlow(chatID, pendingNodeQuota, map[string]string{
-		sessionKeyNodeFlow:         "edit",
+		sessionKeyNodeFlow:         "edit_field",
 		sessionKeyNodeID:           node.ID,
 		sessionKeyGroupID:          group.ID,
 		sessionKeyGroupName:        group.Name,
@@ -833,68 +1024,156 @@ func (c *TelegramController) startNodePolicyEditWizard(ctx context.Context, chat
 		sessionKeyNodeTrafficMode:  node.TrafficMode,
 		sessionKeyNodeResetDay:     strconv.Itoa(node.ResetDay),
 		sessionKeyNodePriority:     strconv.Itoa(node.Priority),
+		sessionKeyNodeEditField:    field,
 		sessionKeyNodePolicySource: "custom",
 	})
-	return c.Bot.SendMessage(ctx, chatID, "请发送新的月流量，例如：500GB、1TB、1000GB。", nodeQuotaMenu())
+	switch field {
+	case nodeEditFieldQuota:
+		c.setSession(chatID, pendingNodeQuota)
+		return c.sendMessageOrEdit(ctx, chatID, "请发送新的月流量，例如：500GB、1TB、1000GB。", nodeQuotaMenu())
+	case nodeEditFieldThreshold:
+		c.setSession(chatID, pendingNodeThreshold)
+		return c.sendMessageOrEdit(ctx, chatID, "请发送新的阈值百分比，例如：80 或 80%。", nodeThresholdMenu())
+	case nodeEditFieldMode:
+		c.setSession(chatID, pendingNodeModeSelect)
+		return c.sendMessageOrEdit(ctx, chatID, "请选择新的统计模式：", nodeTrafficModeMenu())
+	case nodeEditFieldResetDay:
+		c.setSession(chatID, pendingNodeResetDay)
+		return c.sendMessageOrEdit(ctx, chatID, "请发送新的重置日（1-28）。", nodeResetDayMenu())
+	case nodeEditFieldPriority:
+		c.setSession(chatID, pendingNodePriority)
+		return c.sendMessageOrEdit(ctx, chatID, "请发送新的 priority。", nodePriorityMenu())
+	default:
+		c.clearSession(chatID)
+		return c.sendMessageOrEdit(ctx, chatID, "节点策略修改项已失效，请重新选择。", nodesPanelMenu(nil))
+	}
+}
+
+func (c *TelegramController) saveNodePolicyFieldEdit(ctx context.Context, chatID int64, successPrefix string) error {
+	nodeID := c.currentSessionValue(chatID, sessionKeyNodeID)
+	if nodeID == "" {
+		return c.sendMessageOrEdit(ctx, chatID, "节点策略修改流程已失效，请重新开始。", nodesPanelMenu(nil))
+	}
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	quotaBytes, _ := strconv.ParseInt(c.currentSessionValue(chatID, sessionKeyNodeQuota), 10, 64)
+	threshold, _ := strconv.Atoi(c.currentSessionValue(chatID, sessionKeyNodeThreshold))
+	resetDay, _ := strconv.Atoi(c.currentSessionValue(chatID, sessionKeyNodeResetDay))
+	priority, _ := strconv.Atoi(c.currentSessionValue(chatID, sessionKeyNodePriority))
+	node.MonthlyQuotaBytes = quotaBytes
+	node.ThresholdPercent = threshold
+	node.ResetDay = resetDay
+	node.TrafficMode = c.currentSessionValue(chatID, sessionKeyNodeTrafficMode)
+	node.Priority = priority
+	if err := ValidateNodeConfig(node); err != nil {
+		field := c.currentSessionValue(chatID, sessionKeyNodeEditField)
+		return c.startNodePolicyFieldEdit(ctx, chatID, nodeID, field)
+	}
+	if err := c.Store.UpdateNodePolicy(ctx, node); err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "保存节点策略失败："+err.Error(), nodePolicyEditMenu(node))
+	}
+	c.clearSession(chatID)
+	return c.sendNodeDetail(ctx, chatID, node.ID, successPrefix)
+}
+
+func (c *TelegramController) toggleNodeEnabledAndShowPolicy(ctx context.Context, chatID int64, nodeID string) error {
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	node.Enabled = !node.Enabled
+	if err := c.Store.SetNodeEnabled(ctx, node.ID, node.Enabled); err != nil {
+		return err
+	}
+	return c.sendNodePolicyEditPanel(ctx, chatID, node.ID, "✅ 已更新节点启用状态。\n\n")
+}
+
+func (c *TelegramController) toggleNodeAutoSwitchAndShowPolicy(ctx context.Context, chatID int64, nodeID string) error {
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	node.AutoSwitch = !node.AutoSwitch
+	if err := c.Store.SetNodeAutoSwitch(ctx, node.ID, node.AutoSwitch); err != nil {
+		return err
+	}
+	return c.sendNodePolicyEditPanel(ctx, chatID, node.ID, "✅ 已更新自动切换状态。\n\n")
 }
 
 func (c *TelegramController) handleNodeQuotaValue(ctx context.Context, chatID int64, raw string) error {
 	bytes, err := parseGB(raw)
 	if err != nil || bytes <= 0 {
 		c.setSession(chatID, pendingNodeQuota)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 流量总额格式错误，请发送类似 500GB、1TB、1000GB 的值。", nodeQuotaMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 流量总额格式错误，请发送类似 500GB、1TB、1000GB 的值。", nodeQuotaMenu())
 	}
 	c.setSessionValue(chatID, sessionKeyNodeQuota, strconv.FormatInt(bytes, 10))
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
+	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit_field" {
+		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ 月流量已更新。\n\n")
+	}
 	c.setSession(chatID, pendingNodeThreshold)
-	return c.Bot.SendMessage(ctx, chatID, "请发送阈值百分比，例如：80 或 80%。\n\n可直接点击默认值。", nodeThresholdMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请发送阈值百分比，例如：80 或 80%。\n\n可直接点击默认值。", nodeThresholdMenu())
 }
 
 func (c *TelegramController) handleNodeThresholdValue(ctx context.Context, chatID int64, raw string) error {
 	value, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(raw), "%"))
 	if err != nil || value < 1 || value > 100 {
 		c.setSession(chatID, pendingNodeThreshold)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 阈值必须在 1-100 之间，请重新发送。", nodeThresholdMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 阈值必须在 1-100 之间，请重新发送。", nodeThresholdMenu())
 	}
 	c.setSessionValue(chatID, sessionKeyNodeThreshold, strconv.Itoa(value))
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
+	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit_field" {
+		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ 阈值已更新。\n\n")
+	}
 	c.setSession(chatID, pendingNodeModeSelect)
-	return c.Bot.SendMessage(ctx, chatID, "请选择统计模式：", nodeTrafficModeMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请选择统计模式：", nodeTrafficModeMenu())
 }
 
 func (c *TelegramController) handleNodeModeChoice(ctx context.Context, chatID int64, mode string) error {
 	mode = normalizeMode(mode)
 	c.setSessionValue(chatID, sessionKeyNodeTrafficMode, mode)
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
+	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit_field" {
+		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ 统计模式已更新。\n\n")
+	}
 	c.setSession(chatID, pendingNodeResetDay)
-	return c.Bot.SendMessage(ctx, chatID, "请发送重置日（1-28）。\n\n可直接点击默认值。", nodeResetDayMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请发送重置日（1-28）。\n\n可直接点击默认值。", nodeResetDayMenu())
 }
 
 func (c *TelegramController) handleNodeResetDayValue(ctx context.Context, chatID int64, raw string) error {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || value < 1 || value > 28 {
 		c.setSession(chatID, pendingNodeResetDay)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 重置日必须在 1-28 之间，请重新发送。", nodeResetDayMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 重置日必须在 1-28 之间，请重新发送。", nodeResetDayMenu())
 	}
 	c.setSessionValue(chatID, sessionKeyNodeResetDay, strconv.Itoa(value))
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
+	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit_field" {
+		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ 重置日已更新。\n\n")
+	}
 	c.setSession(chatID, pendingNodePriority)
-	return c.Bot.SendMessage(ctx, chatID, "请发送 priority（默认 10）。\n\n可直接点击默认值。", nodePriorityMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请发送 priority（默认 10）。\n\n可直接点击默认值。", nodePriorityMenu())
 }
 
 func (c *TelegramController) handleNodePriorityValue(ctx context.Context, chatID int64, raw string) error {
 	value, err := strconv.Atoi(strings.TrimSpace(raw))
 	if err != nil || value < 0 {
 		c.setSession(chatID, pendingNodePriority)
-		return c.Bot.SendMessage(ctx, chatID, "❌ priority 不能小于 0，请重新发送。", nodePriorityMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ priority 不能小于 0，请重新发送。", nodePriorityMenu())
 	}
 	c.setSessionValue(chatID, sessionKeyNodePriority, strconv.Itoa(value))
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "custom")
+	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit_field" {
+		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ priority 已更新。\n\n")
+	}
 	c.setSession(chatID, pendingNodeConfirm)
 	if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit" {
-		return c.Bot.SendMessage(ctx, chatID, c.buildNodeConfirmText(chatID), nodePolicyConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, c.buildNodeConfirmText(chatID), nodePolicyConfirmMenu())
 	}
-	return c.Bot.SendMessage(ctx, chatID, c.buildNodeConfirmText(chatID), nodeCreateConfirmMenu())
+	return c.sendMessageOrEdit(ctx, chatID, c.buildNodeConfirmText(chatID), nodeCreateConfirmMenu())
 }
 
 func (c *TelegramController) buildNodeConfirmText(chatID int64) string {
@@ -932,7 +1211,7 @@ func (c *TelegramController) buildNodeConfirmText(chatID int64) string {
 func (c *TelegramController) handleNodeConfirm(ctx context.Context, chatID int64) error {
 	groupID := c.currentSessionValue(chatID, sessionKeyGroupID)
 	if groupID == "" || c.currentSessionValue(chatID, sessionKeyGroupName) == "" {
-		return c.Bot.SendMessage(ctx, chatID, "节点配置流程已失效，请重新开始。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点配置流程已失效，请重新开始。", nodesPanelMenu(nil))
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
@@ -958,12 +1237,12 @@ func (c *TelegramController) handleNodeConfirm(ctx context.Context, chatID int64
 	}
 	if err := ValidateNodeConfig(node); err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
-		return c.Bot.SendMessage(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点信息。", nodeCreateConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点信息。", nodeCreateConfirmMenu())
 	}
 	created, err := c.Store.CreateNode(ctx, node)
 	if err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 创建节点失败："+err.Error()+"\n\n请重新填写。", nodeCreateConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 创建节点失败："+err.Error()+"\n\n请重新填写。", nodeCreateConfirmMenu())
 	}
 	c.clearSession(chatID)
 	return c.sendNodeCreatedSummary(ctx, chatID, created)
@@ -972,11 +1251,11 @@ func (c *TelegramController) handleNodeConfirm(ctx context.Context, chatID int64
 func (c *TelegramController) handleNodeSavePolicy(ctx context.Context, chatID int64) error {
 	nodeID := c.currentSessionValue(chatID, sessionKeyNodeID)
 	if nodeID == "" {
-		return c.Bot.SendMessage(ctx, chatID, "节点策略修改流程已失效，请重新开始。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点策略修改流程已失效，请重新开始。", nodesPanelMenu(nil))
 	}
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	quotaBytes, _ := strconv.ParseInt(c.currentSessionValue(chatID, sessionKeyNodeQuota), 10, 64)
 	threshold, _ := strconv.Atoi(c.currentSessionValue(chatID, sessionKeyNodeThreshold))
@@ -989,11 +1268,11 @@ func (c *TelegramController) handleNodeSavePolicy(ctx context.Context, chatID in
 	node.Priority = priority
 	if err := ValidateNodeConfig(node); err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
-		return c.Bot.SendMessage(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点策略。", nodePolicyConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点策略。", nodePolicyConfirmMenu())
 	}
 	if err := c.Store.UpdateNodePolicy(ctx, node); err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
-		return c.Bot.SendMessage(ctx, chatID, "❌ 保存节点策略失败："+err.Error()+"\n\n请重新填写。", nodePolicyConfirmMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 保存节点策略失败："+err.Error()+"\n\n请重新填写。", nodePolicyConfirmMenu())
 	}
 	c.clearSession(chatID)
 	return c.sendNodeDetail(ctx, chatID, node.ID, "✅ 节点策略已更新。\n\n")
@@ -1002,11 +1281,11 @@ func (c *TelegramController) handleNodeSavePolicy(ctx context.Context, chatID in
 func (c *TelegramController) sendNodeDetail(ctx context.Context, chatID int64, nodeID, prefix string) error {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	group, err := c.Store.GetGroupByID(ctx, node.GroupID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点所属分组不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点所属分组不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
@@ -1050,7 +1329,7 @@ func (c *TelegramController) sendNodeDetail(ctx context.Context, chatID int64, n
 		node.Enabled,
 		node.AutoSwitch,
 	)
-	return c.Bot.SendMessage(ctx, chatID, text, nodeDetailMenu(node, hasReported, online))
+	return c.sendMessageOrEdit(ctx, chatID, text, nodeDetailMenu(node, hasReported, online))
 }
 
 func (c *TelegramController) nodeDNSMatches(ctx context.Context, group db.Group, node db.Node) (bool, error) {
@@ -1076,7 +1355,7 @@ func (c *TelegramController) nodeDNSMatches(ctx context.Context, group db.Group,
 func (c *TelegramController) toggleNodeEnabled(ctx context.Context, chatID int64, nodeID string) error {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	node.Enabled = !node.Enabled
 	if err := c.Store.SetNodeEnabled(ctx, node.ID, node.Enabled); err != nil {
@@ -1088,7 +1367,7 @@ func (c *TelegramController) toggleNodeEnabled(ctx context.Context, chatID int64
 func (c *TelegramController) toggleNodeAutoSwitch(ctx context.Context, chatID int64, nodeID string) error {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 	}
 	node.AutoSwitch = !node.AutoSwitch
 	if err := c.Store.SetNodeAutoSwitch(ctx, node.ID, node.AutoSwitch); err != nil {
@@ -1100,10 +1379,10 @@ func (c *TelegramController) toggleNodeAutoSwitch(ctx context.Context, chatID in
 func (c *TelegramController) sendAgentTroubleshooting(ctx context.Context, chatID int64, nodeID string) error {
 	if nodeID != "" {
 		if _, err := c.Store.GetNodeByID(ctx, nodeID); err != nil {
-			return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+			return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
 		}
 	}
-	return c.Bot.SendMessage(ctx, chatID, "Agent 安装排查：\n\n请在 Agent 机器执行：\ndf -h\nqdr-agent version\nqdr-agent status\nqdr-agent config-check\nsystemctl status quota-dns-router-agent --no-pager -l\njournalctl -u quota-dns-router-agent -n 100 --no-pager\n\n如果 df -h 显示 / 已 100%，请先清理磁盘：\napt clean\njournalctl --vacuum-size=100M\ndocker system prune -af", nil)
+	return c.sendMessageOrEdit(ctx, chatID, "Agent 安装排查：\n\n请在 Agent 机器执行：\ndf -h\nqdr-agent version\nqdr-agent status\nqdr-agent config-check\nsystemctl status quota-dns-router-agent --no-pager -l\njournalctl -u quota-dns-router-agent -n 100 --no-pager\n\n如果 df -h 显示 / 已 100%，请先清理磁盘：\napt clean\njournalctl --vacuum-size=100M\ndocker system prune -af", nil)
 }
 
 func (c *TelegramController) sendPolicyPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -1119,21 +1398,21 @@ func (c *TelegramController) sendPolicyPanel(ctx context.Context, chatID int64, 
 	text += fmt.Sprintf("默认优先级：%d\n", defaultNodePriority)
 	text += "自动切换：" + ternaryText(policy.AutoSwitchEnabled, "启用", "关闭") + "\n\n"
 	text += "这些默认值会用于新建节点。已有节点可以在节点详情中单独修改。"
-	return c.Bot.SendMessage(ctx, chatID, text, policyPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, text, policyPanelMenu())
 }
 
 func (c *TelegramController) sendPolicyModeMenu(ctx context.Context, chatID int64) error {
-	return c.Bot.SendMessage(ctx, chatID, "请选择默认统计模式：", policyModeMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请选择默认统计模式：", policyModeMenu())
 }
 
 func (c *TelegramController) sendPolicyValuePrompt(ctx context.Context, chatID int64, prefix, field string) error {
 	switch field {
 	case policyFieldQuota:
-		return c.Bot.SendMessage(ctx, chatID, prefix+"请发送默认月流量，例如：500GB、1TB、1000GB。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请发送默认月流量，例如：500GB、1TB、1000GB。", nil)
 	case policyFieldResetDay:
-		return c.Bot.SendMessage(ctx, chatID, prefix+"请发送默认重置日（1-28）。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请发送默认重置日（1-28）。", nil)
 	default:
-		return c.Bot.SendMessage(ctx, chatID, prefix+"请发送默认阈值百分比，例如：80 或 80%。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请发送默认阈值百分比，例如：80 或 80%。", nil)
 	}
 }
 
@@ -1148,32 +1427,32 @@ func (c *TelegramController) handlePolicyValueInput(ctx context.Context, chatID 
 		bytes, parseErr := parseGB(text)
 		if parseErr != nil || bytes <= 0 {
 			c.setSession(chatID, pendingPolicyValue)
-			return c.Bot.SendMessage(ctx, chatID, "❌ 默认月流量格式错误，请重新发送。", nil)
+			return c.sendMessageOrEdit(ctx, chatID, "❌ 默认月流量格式错误，请重新发送。", nil)
 		}
 		policy.DefaultMonthlyQuotaBytes = bytes
 	case policyFieldThreshold:
 		value, parseErr := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(text), "%"))
 		if parseErr != nil || value < 1 || value > 100 {
 			c.setSession(chatID, pendingPolicyValue)
-			return c.Bot.SendMessage(ctx, chatID, "❌ 默认阈值必须在 1-100 之间，请重新发送。", nil)
+			return c.sendMessageOrEdit(ctx, chatID, "❌ 默认阈值必须在 1-100 之间，请重新发送。", nil)
 		}
 		policy.DefaultThresholdPercent = value
 	case policyFieldResetDay:
 		value, parseErr := strconv.Atoi(strings.TrimSpace(text))
 		if parseErr != nil || value < 1 || value > 28 {
 			c.setSession(chatID, pendingPolicyValue)
-			return c.Bot.SendMessage(ctx, chatID, "❌ 默认重置日必须在 1-28 之间，请重新发送。", nil)
+			return c.sendMessageOrEdit(ctx, chatID, "❌ 默认重置日必须在 1-28 之间，请重新发送。", nil)
 		}
 		policy.DefaultResetDay = value
 	default:
 		c.clearSession(chatID)
-		return c.Bot.SendMessage(ctx, chatID, "策略修改流程已失效，请重新选择。", policyPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "策略修改流程已失效，请重新选择。", policyPanelMenu())
 	}
 	if err := c.Store.SavePolicy(ctx, policy); err != nil {
 		return err
 	}
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, "✅ 策略已更新。", policySavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "✅ 策略已更新。", policySavedMenu())
 }
 
 func (c *TelegramController) handlePolicyModeChoice(ctx context.Context, chatID int64, mode string) error {
@@ -1185,7 +1464,7 @@ func (c *TelegramController) handlePolicyModeChoice(ctx context.Context, chatID 
 	if err := c.Store.SavePolicy(ctx, policy); err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, "✅ 默认统计模式已更新为："+modeLabel(policy.DefaultTrafficMode), policySavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "✅ 默认统计模式已更新为："+modeLabel(policy.DefaultTrafficMode), policySavedMenu())
 }
 
 func (c *TelegramController) togglePolicyAutoSwitch(ctx context.Context, chatID int64) error {
@@ -1197,7 +1476,7 @@ func (c *TelegramController) togglePolicyAutoSwitch(ctx context.Context, chatID 
 	if err := c.Store.SavePolicy(ctx, policy); err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, "✅ 自动切换已"+ternaryText(policy.AutoSwitchEnabled, "启用", "关闭"), policySavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "✅ 自动切换已"+ternaryText(policy.AutoSwitchEnabled, "启用", "关闭"), policySavedMenu())
 }
 
 func (c *TelegramController) sendAgentPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -1206,14 +1485,14 @@ func (c *TelegramController) sendAgentPanel(ctx context.Context, chatID int64, p
 		return err
 	}
 	if len(nodes) == 0 {
-		return c.Bot.SendMessage(ctx, chatID, prefix+"🤖 Agent 安装\n\n还没有节点，请先添加节点。", agentNeedNodeMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"🤖 Agent 安装\n\n还没有节点，请先添加节点。", agentNeedNodeMenu())
 	}
-	return c.Bot.SendMessage(ctx, chatID, prefix+"🤖 Agent 安装\n\n请选择要安装 Agent 的节点：", agentNodeMenu(nodes))
+	return c.sendMessageOrEdit(ctx, chatID, prefix+"🤖 Agent 安装\n\n请选择要安装 Agent 的节点：", agentNodeMenu(nodes))
 }
 
 func (c *TelegramController) sendAgentInstallCommand(ctx context.Context, chatID int64, nodeID string) error {
 	if _, err := c.Store.GetNodeByID(ctx, nodeID); err != nil {
-		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", agentPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", agentPanelMenu())
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
@@ -1224,9 +1503,28 @@ func (c *TelegramController) sendAgentInstallCommand(ctx context.Context, chatID
 		return err
 	}
 	if len(preview.Missing) > 0 {
-		return c.Bot.SendMessage(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(preview.Missing, "、"), setupMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(preview.Missing, "、"), setupMenu())
 	}
-	return c.Bot.SendMessage(ctx, chatID, formatAgentInstallMessage(preview), agentCommandMenu(preview.DNSReady))
+	return c.sendMessageOrEdit(ctx, chatID, formatAgentInstallMessage(preview), agentCommandMenu(nodeID, preview.DNSReady))
+}
+
+func (c *TelegramController) sendPureAgentInstallCommand(ctx context.Context, chatID int64, nodeID string) error {
+	policy, err := c.Store.GetPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	preview, err := c.buildAgentInstallPreview(ctx, nodeID, policy)
+	if err != nil {
+		return err
+	}
+	if len(preview.Missing) > 0 {
+		return c.sendMessageOrEdit(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(preview.Missing, "、"), setupMenu())
+	}
+	return c.Bot.SendMessage(ctx, chatID, preview.Command, nil)
+}
+
+func (c *TelegramController) sendPureAgentUninstallCommand(ctx context.Context, chatID int64) error {
+	return c.Bot.SendMessage(ctx, chatID, agentUninstallCommand(), nil)
 }
 
 func (c *TelegramController) tryDeleteMessage(ctx context.Context, chatID, messageID int64) {
@@ -1298,6 +1596,14 @@ func dnsNeedNodeMenu() *telegram.ReplyMarkup {
 	}}
 }
 
+func dnsPendingMenu() *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "添加节点", CallbackData: "nodes_add"}},
+		{{Text: "查看 DNS 状态", CallbackData: "dns_status"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
+}
+
 func dnsSavedMenu(nodeID string) *telegram.ReplyMarkup {
 	callback := "agent"
 	if strings.TrimSpace(nodeID) != "" {
@@ -1341,6 +1647,43 @@ func dnsNodeMenu(nodes []db.Node) *telegram.ReplyMarkup {
 	}
 	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "取消", CallbackData: "menu"}})
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func switchGroupMenu(groups []db.Group) *telegram.ReplyMarkup {
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(groups)+1)
+	for _, group := range groups {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: group.Name, CallbackData: "switch_group:" + group.ID}})
+	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}})
+	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func switchTargetMenu(groupID string, nodes []db.NodeWithGroup) *telegram.ReplyMarkup {
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(nodes)+2)
+	for _, node := range nodes {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: node.Name + " / " + node.PublicIP, CallbackData: "switch_pick:" + groupID + ":" + node.ID}})
+	}
+	rows = append(rows,
+		[]telegram.InlineKeyboardButton{{Text: "返回分组列表", CallbackData: "switch"}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
+	)
+	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func manualSwitchConfirmMenu(groupID, nodeID string) *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "确认切换", CallbackData: "switch_do:" + groupID + ":" + nodeID}},
+		{{Text: "返回节点列表", CallbackData: "switch_group:" + groupID}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
+}
+
+func manualSwitchDoneMenu(nodeID string) *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "继续手动切换", CallbackData: "switch"}},
+		{{Text: "查看节点详情", CallbackData: "nodes_view:" + nodeID}},
+		{{Text: "当前状态", CallbackData: "status"}},
+	}}
 }
 
 func groupsPanelMenu() *telegram.ReplyMarkup {
@@ -1502,14 +1845,17 @@ func agentNodeMenu(nodes []db.NodeWithGroup) *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func agentCommandMenu(hasDNS bool) *telegram.ReplyMarkup {
-	rows := make([][]telegram.InlineKeyboardButton, 0, 3)
+func agentCommandMenu(nodeID string, hasDNS bool) *telegram.ReplyMarkup {
+	rows := make([][]telegram.InlineKeyboardButton, 0, 6)
 	if !hasDNS {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "配置 DNS", CallbackData: "dns"}})
 	}
 	rows = append(rows,
-		[]telegram.InlineKeyboardButton{{Text: "当前状态", CallbackData: "status"}},
-		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
+		[]telegram.InlineKeyboardButton{{Text: "显示纯命令", CallbackData: "agent_copy:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "重新生成命令", CallbackData: "agent_node:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "显示卸载命令", CallbackData: "agent_uninstall_copy:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "安装排查", CallbackData: "agent_troubleshoot:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
 	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
@@ -1528,6 +1874,7 @@ func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarku
 		autoText = "开启自动切换"
 	}
 	rows := [][]telegram.InlineKeyboardButton{
+		{{Text: "手动切换到此节点", CallbackData: "switch_to_node:" + node.ID}},
 		{{Text: installText, CallbackData: "agent_node:" + node.ID}},
 		{{Text: "修改节点策略", CallbackData: "nodes_edit_policy:" + node.ID}},
 		{{Text: enabledText, CallbackData: "nodes_toggle_enabled:" + node.ID}},
@@ -1538,6 +1885,27 @@ func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarku
 	}
 	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回节点列表", CallbackData: "nodes"}})
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func nodePolicyEditMenu(node db.Node) *telegram.ReplyMarkup {
+	autoText := "关闭自动切换"
+	if !node.AutoSwitch {
+		autoText = "开启自动切换"
+	}
+	enableText := "禁用节点"
+	if !node.Enabled {
+		enableText = "启用节点"
+	}
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "月流量总额", CallbackData: "nodes_edit_quota:" + node.ID}},
+		{{Text: "阈值百分比", CallbackData: "nodes_edit_threshold:" + node.ID}},
+		{{Text: "统计模式", CallbackData: "nodes_edit_mode:" + node.ID}},
+		{{Text: "重置日", CallbackData: "nodes_edit_reset_day:" + node.ID}},
+		{{Text: "优先级", CallbackData: "nodes_edit_priority:" + node.ID}},
+		{{Text: enableText, CallbackData: "nodes_edit_toggle_enabled:" + node.ID}},
+		{{Text: autoText, CallbackData: "nodes_edit_toggle_auto:" + node.ID}},
+		{{Text: "返回节点详情", CallbackData: "nodes_view:" + node.ID}},
+	}}
 }
 
 func masterSavedMenu() *telegram.ReplyMarkup {

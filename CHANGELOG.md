@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.1.0-alpha.8
+
+- Telegram 初始化流程调整为 DNS 优先：Cloudflare 完成后优先引导配置 DNS A 记录；没有分组时自动创建 `default`，没有节点时可先保存“待绑定”记录名。
+- callback 场景优先使用 `editMessageText` 更新当前面板，减少反复点按钮带来的刷屏；同时继续保留 `answerCallbackQuery` 和失败后的 send fallback。
+- 新增手动切换面板与节点详情快捷入口，切换历史写入 `trigger_type`，`/status` 最近切换会显示手动/自动触发类型。
+- 节点详情页新增单字段策略编辑面板，可单独修改月流量、阈值、统计模式、重置日、priority，以及启用/自动切换开关。
+- Agent 命令页拆分为“带说明预览”和“显示纯命令”，并补充 Agent 卸载命令；Master / Agent 安装脚本完成后都会直接打印卸载与 purge 命令。
+- 版本升级到 `0.1.0-alpha.8`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和测试。
+
 ## 0.1.0-alpha.7
 
 - 修复 `.github/workflows/release.yml` 中 `Build release archives` 步骤的 shell 语法错误，移除 YAML `run` 块里的 heredoc，改用 `printf` 生成 `README.txt`。

@@ -33,6 +33,7 @@ type DNSSummary struct {
 	GroupID         string
 	RecordName      string
 	RecordID        string
+	Pending         bool
 	CurrentIP       string
 	MatchedNodeName string
 	Proxied         bool
@@ -67,6 +68,7 @@ type NodeDiagnostic struct {
 type GroupDiagnostic struct {
 	Name                 string
 	DNSRecord            string
+	DNSPending           bool
 	CurrentIP            string
 	CurrentNode          string
 	NodeCount            int
@@ -162,6 +164,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 			GroupID:        group.ID,
 			RecordName:     cfg.RecordName,
 			RecordID:       cfg.RecordID,
+			Pending:        strings.TrimSpace(cfg.RecordName) != "" && strings.TrimSpace(cfg.RecordID) == "",
 			Proxied:        cfg.Proxied,
 			TTL:            cfg.TTL,
 			LastResult:     valueOrDash(joinNotes(mustStatusNote(ctx, store, noteKeyDNSLookup(group.ID)), mustStatusNote(ctx, store, noteKeyDNSUpdate(group.ID)))),
@@ -172,6 +175,14 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 		if dns != nil && cfg.ZoneID != "" && cfg.RecordName != "" {
 			rec, aErr := dns.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
 			if aErr != nil {
+				if summary.Pending {
+					summary.Status = "⏳ 待绑定节点"
+					summary.LastResult = valueOrDash(firstNonEmpty(mustStatusNote(ctx, store, noteKeyDNSUpdate(group.ID)), "⏳ 已保存记录名，等待绑定节点"))
+					summary.LastError = "-"
+					summary.NextSuggestion = []string{"先添加节点，再在 DNS 面板把记录绑定到节点"}
+					out = append(out, summary)
+					continue
+				}
 				any, anyErr := dns.LookupDNSRecordAnyType(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
 				if anyErr != nil {
 					msg := "未找到 DNS A 记录，请确认记录存在"
@@ -191,6 +202,11 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 					summary.NextSuggestion = []string{"请改为 A 记录", "重新执行 /dns set"}
 				}
 			} else {
+				if summary.Pending {
+					summary.Pending = false
+					summary.RecordID = rec.ID
+					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
+				}
 				summary.CurrentIP = rec.Content
 				summary.RecordID = rec.ID
 				_ = store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "✅ DNS 记录查询成功")
@@ -214,6 +230,12 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 					summary.NextSuggestion = []string{"如需切换测试，可调整阈值或构造测试流量"}
 				}
 			}
+		}
+		if summary.Pending {
+			summary.Status = "⏳ 待绑定节点"
+			summary.LastResult = valueOrDash(firstNonEmpty(mustStatusNote(ctx, store, noteKeyDNSUpdate(group.ID)), "⏳ 已保存记录名，等待绑定节点"))
+			summary.LastError = "-"
+			summary.NextSuggestion = []string{"先添加节点，再在 DNS 面板把记录绑定到节点"}
 		}
 		out = append(out, summary)
 	}
@@ -287,8 +309,14 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		hasReported := false
 		currentNode := "-"
 		currentIP := "-"
+		dnsPending := strings.TrimSpace(cfg.RecordName) != "" && strings.TrimSpace(cfg.RecordID) == ""
 		if dns != nil && cfg.ZoneID != "" && cfg.RecordName != "" {
 			if rec, err := dns.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName); err == nil {
+				if dnsPending {
+					dnsPending = false
+					cfg.RecordID = rec.ID
+					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
+				}
 				currentIP = rec.Content
 				for _, usage := range usages {
 					if usage.PublicIP == rec.Content {
@@ -328,6 +356,9 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		status := "✅ 可自动切换"
 		if strings.TrimSpace(cfg.RecordName) == "" {
 			status = "⏳ 待配置 DNS A 记录"
+		} else if dnsPending {
+			status = "⏳ DNS 已保存，等待绑定节点"
+			currentNode = "待绑定"
 		} else if !autoSwitch {
 			status = "⚠️ 全局自动切换未启用"
 		} else if availableTargets == 0 {
@@ -340,6 +371,7 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		out = append(out, GroupDiagnostic{
 			Name:                 group.Name,
 			DNSRecord:            cfg.RecordName,
+			DNSPending:           dnsPending,
 			CurrentIP:            currentIP,
 			CurrentNode:          currentNode,
 			NodeCount:            len(usages),
@@ -449,7 +481,7 @@ func FormatCloudflareSummary(summary CloudflareSummary) string {
 
 func FormatDNSSummaries(items []DNSSummary) string {
 	if len(items) == 0 {
-		return "🌐 DNS 配置\n\n尚未配置任何分组的 DNS A 记录。\n下一步：先执行 /groups add <分组名>，再执行 /dns set <分组名> <A记录>"
+		return "🌐 DNS 配置\n\n尚未配置任何分组的 DNS A 记录。\n下一步：点击 DNS 面板里的“添加 DNS A 记录”；没有分组时会自动创建 default。"
 	}
 	var b strings.Builder
 	b.WriteString("🌐 DNS 配置\n")

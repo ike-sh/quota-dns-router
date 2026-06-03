@@ -25,6 +25,11 @@ const (
 	TrafficModeRX   = "rx"
 	TrafficModeTX   = "tx"
 	TrafficModeBoth = "rx+tx"
+
+	SwitchTriggerManual    = "manual"
+	SwitchTriggerThreshold = "threshold"
+	SwitchTriggerOffline   = "offline"
+	SwitchTriggerDisabled  = "disabled"
 )
 
 type Store struct {
@@ -137,6 +142,7 @@ type StatusSummary struct {
 type GroupStatus struct {
 	Group       Group
 	DNSRecord   string
+	DNSPending  bool
 	CurrentNode string
 	CurrentIP   string
 	Nodes       []NodeStatus
@@ -172,6 +178,7 @@ type SwitchHistory struct {
 	RecordName   string
 	OldIP        string
 	NewIP        string
+	TriggerType  string
 	Reason       string
 	Status       string
 	ErrorMessage string
@@ -962,13 +969,14 @@ func (s *Store) UpdateGroupCurrentNode(ctx context.Context, groupID, nodeID stri
 	return err
 }
 
-func (s *Store) RecordSwitchHistory(ctx context.Context, groupID, fromNodeID, toNodeID, recordName, oldIP, newIP, reason, status, errMsg string, secrets ...string) error {
+func (s *Store) RecordSwitchHistory(ctx context.Context, groupID, fromNodeID, toNodeID, recordName, oldIP, newIP, triggerType, reason, status, errMsg string, secrets ...string) error {
 	errMsg = sanitizeDiagnosticMessage(errMsg, secrets...)
+	triggerType = normalizeSwitchTriggerType(triggerType)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO dns_switch_history(
-			id, group_id, from_node_id, to_node_id, record_name, old_ip, new_ip, reason, status, error_message
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, NewID("sw"), groupID, nullIfEmpty(fromNodeID), nullIfEmpty(toNodeID), recordName, nullIfEmpty(oldIP), nullIfEmpty(newIP), reason, status, nullIfEmpty(errMsg))
+			id, group_id, from_node_id, to_node_id, record_name, old_ip, new_ip, trigger_type, reason, status, error_message
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, NewID("sw"), groupID, nullIfEmpty(fromNodeID), nullIfEmpty(toNodeID), recordName, nullIfEmpty(oldIP), nullIfEmpty(newIP), triggerType, reason, status, nullIfEmpty(errMsg))
 	return err
 }
 
@@ -993,6 +1001,7 @@ func (s *Store) getSwitchHistory(ctx context.Context, where string) (SwitchHisto
 			h.record_name,
 			COALESCE(h.old_ip, ''),
 			COALESCE(h.new_ip, ''),
+			COALESCE(h.trigger_type, ''),
 			h.reason,
 			h.status,
 			COALESCE(h.error_message, ''),
@@ -1017,6 +1026,7 @@ func (s *Store) getSwitchHistory(ctx context.Context, where string) (SwitchHisto
 		&item.RecordName,
 		&item.OldIP,
 		&item.NewIP,
+		&item.TriggerType,
 		&item.Reason,
 		&item.Status,
 		&item.ErrorMessage,
@@ -1052,8 +1062,9 @@ func (s *Store) BuildStatusSummary(ctx context.Context, at time.Time) (StatusSum
 			return StatusSummary{}, err
 		}
 		gs := GroupStatus{
-			Group:     group,
-			DNSRecord: cfg.RecordName,
+			Group:      group,
+			DNSRecord:  cfg.RecordName,
+			DNSPending: strings.TrimSpace(cfg.RecordName) != "" && strings.TrimSpace(cfg.RecordID) == "",
 		}
 		for _, usage := range usages {
 			lastReported := "从未上报"
@@ -1078,9 +1089,26 @@ func (s *Store) BuildStatusSummary(ctx context.Context, at time.Time) (StatusSum
 			}
 			gs.Nodes = append(gs.Nodes, ns)
 		}
+		if gs.DNSPending {
+			gs.CurrentNode = "待绑定"
+			gs.CurrentIP = ""
+		}
 		summary.Groups = append(summary.Groups, gs)
 	}
 	return summary, nil
+}
+
+func normalizeSwitchTriggerType(triggerType string) string {
+	switch strings.ToLower(strings.TrimSpace(triggerType)) {
+	case SwitchTriggerManual:
+		return SwitchTriggerManual
+	case SwitchTriggerOffline:
+		return SwitchTriggerOffline
+	case SwitchTriggerDisabled:
+		return SwitchTriggerDisabled
+	default:
+		return SwitchTriggerThreshold
+	}
 }
 
 func BillingCycleStart(now time.Time, resetDay int) time.Time {

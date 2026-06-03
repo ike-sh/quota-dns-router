@@ -13,7 +13,7 @@ func TestStatusReportRecentSwitchSummary(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
 	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
-	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", "流量达到阈值", "success", ""); err != nil {
+	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", db.SwitchTriggerThreshold, "流量达到阈值", "success", ""); err != nil {
 		t.Fatal(err)
 	}
 	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())
@@ -21,10 +21,33 @@ func TestStatusReportRecentSwitchSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras())
-	for _, want := range []string{"最近切换", "分组：hk", "域名：hk.example.com", "hk-01 / 1.1.1.1 -> hk-02 / 2.2.2.2"} {
+	for _, want := range []string{"最近切换", "分组：hk", "域名：hk.example.com", "触发类型：自动（阈值）", "hk-01 / 1.1.1.1 -> hk-02 / 2.2.2.2"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected status report to contain %q: %s", want, text)
 		}
+	}
+}
+
+func TestStatusReportShowsPendingDNSBinding(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", 120, false, true); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras())
+	if !strings.Contains(text, "当前指向：待绑定") {
+		t.Fatalf("expected pending dns binding in status report: %s", text)
 	}
 }
 
@@ -32,7 +55,7 @@ func TestStatusReportRecentFailureSummary(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
 	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
-	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", "流量达到阈值", "failed", "Cloudflare 返回 403 token=cf_secret_abcd", "cf_secret_abcd"); err != nil {
+	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", db.SwitchTriggerThreshold, "流量达到阈值", "failed", "Cloudflare 返回 403 token=cf_secret_abcd", "cf_secret_abcd"); err != nil {
 		t.Fatal(err)
 	}
 	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())

@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.7")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.8")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.7")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.8")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -189,6 +189,25 @@ func TestInstallScriptsPrintServiceFailureDiagnostics(t *testing.T) {
 	agent := readScript(t, "install-agent.sh")
 	assertContains(t, agent, "systemctl status quota-dns-router-agent --no-pager -l")
 	assertContains(t, agent, "journalctl -u quota-dns-router-agent -n 100 --no-pager")
+}
+
+func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
+	master := readScript(t, "install-master.sh")
+	for _, want := range []string{
+		"Cloudflare、DNS、节点和 Agent 安装",
+		"DNS 向导会自动创建 default 分组",
+		"uninstall-master.sh) --yes",
+		"uninstall-master.sh) --yes --purge",
+	} {
+		assertContains(t, master, want)
+	}
+	agent := readScript(t, "install-agent.sh")
+	for _, want := range []string{
+		"uninstall-agent.sh) --yes",
+		"uninstall-agent.sh) --yes --purge",
+	} {
+		assertContains(t, agent, want)
+	}
 }
 
 func TestUninstallScriptsPurgeAndResetFailed(t *testing.T) {

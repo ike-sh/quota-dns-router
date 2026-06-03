@@ -125,9 +125,9 @@ func FormatSetupGuide(status SetupStatus) string {
 	b.WriteString("初始化步骤：优先点击下面的按钮完成。\n")
 	b.WriteString(stepLine(status.PublicURLConfigured, "1) 配置 Master 公网地址", "按钮：1. 配置 Master 公网地址"))
 	b.WriteString(stepLine(status.CloudflareTokenConfigured && strings.TrimSpace(status.ZoneName) != "" && strings.TrimSpace(status.ZoneID) != "", "2) 配置 Cloudflare Token / Zone", "按钮：2. Cloudflare 配置"))
-	b.WriteString(stepLine(status.GroupCount > 0, "3) 创建分组", "按钮：3. 分组管理"))
-	b.WriteString(stepLine(status.NodeCount > 0, "4) 添加节点", "按钮：4. 节点管理"))
-	b.WriteString(stepLine(status.DNSConfigCount > 0, "5) 配置 DNS A 记录", "按钮：5. DNS 配置"))
+	b.WriteString(stepLine(status.DNSConfigCount > 0, "3) 配置 DNS A 记录", "按钮：3. DNS 配置"))
+	b.WriteString(stepLine(status.GroupCount > 0, "4) 创建分组", "按钮：4. 分组管理"))
+	b.WriteString(stepLine(status.NodeCount > 0, "5) 添加节点", "按钮：5. 节点管理"))
 	b.WriteString(stepLine(len(AgentInstallMissingItems(status)) == 0 && status.NodeCount > 0, "6) 生成 Agent 安装命令", "按钮：6. Agent 安装"))
 	b.WriteString(stepLine(status.NodeCount > 0 && status.OnlineAgentCount > 0, "7) 查看状态 / 等待 Agent 上线", "按钮：7. 当前状态"))
 	b.WriteString("\n可选：流量策略可在节点创建前后调整，按钮：流量策略\n")
@@ -171,7 +171,11 @@ func FormatStatusReport(status SetupStatus, summary db.StatusSummary, extras ...
 	}
 
 	for _, g := range summary.Groups {
-		b.WriteString(fmt.Sprintf("\n分组：%s DNS：%s 当前指向：%s %s\n", g.Group.Name, valueOrDash(g.DNSRecord), valueOrDash(g.CurrentNode), valueOrDash(g.CurrentIP)))
+		if g.DNSPending {
+			b.WriteString(fmt.Sprintf("\n分组：%s DNS：%s 当前指向：待绑定\n", g.Group.Name, valueOrDash(g.DNSRecord)))
+		} else {
+			b.WriteString(fmt.Sprintf("\n分组：%s DNS：%s 当前指向：%s %s\n", g.Group.Name, valueOrDash(g.DNSRecord), valueOrDash(g.CurrentNode), valueOrDash(g.CurrentIP)))
+		}
 		for _, n := range g.Nodes {
 			b.WriteString(fmt.Sprintf("- %s %s %.1f%%/%d%% state=%s enabled=%t auto=%t priority=%d last=%s\n", n.Name, n.PublicIP, n.UsagePercent, n.Threshold, summaryNodeState(n), n.Enabled, n.AutoSwitch, n.Priority, n.LastReported))
 		}
