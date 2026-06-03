@@ -9,13 +9,13 @@ func TestValidateMasterPublicURL(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{name: "http ip", input: "http://1.2.3.4:8080", want: "http://1.2.3.4:8080"},
-		{name: "https domain", input: "https://domain.example.com", want: "https://domain.example.com"},
+		{name: "http ip", input: "http://203.0.113.10:8080", want: "http://203.0.113.10:8080"},
+		{name: "https domain", input: "https://example.com", want: "https://example.com"},
 		{name: "empty", input: "", wantErr: true},
-		{name: "bad scheme", input: "ftp://domain.example.com", wantErr: true},
-		{name: "path rejected", input: "https://domain.example.com/api", wantErr: true},
-		{name: "query rejected", input: "https://domain.example.com?x=1", wantErr: true},
-		{name: "fragment rejected", input: "https://domain.example.com#x", wantErr: true},
+		{name: "bad scheme", input: "ftp://example.com", wantErr: true},
+		{name: "path rejected", input: "https://example.com/api", wantErr: true},
+		{name: "query rejected", input: "https://example.com?x=1", wantErr: true},
+		{name: "fragment rejected", input: "https://example.com#x", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -42,7 +42,7 @@ func TestIsLocalMasterPublicURL(t *testing.T) {
 			t.Fatalf("expected local URL: %s", input)
 		}
 	}
-	if IsLocalMasterPublicURL("https://master.example.com") {
+	if IsLocalMasterPublicURL("https://example.com") {
 		t.Fatal("expected public URL")
 	}
 }

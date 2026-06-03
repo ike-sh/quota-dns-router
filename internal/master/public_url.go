@@ -45,7 +45,7 @@ func NormalizeMasterPublicURLInput(raw string) (string, bool, error) {
 		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：http://192.236.242.173:8080")
 	}
 	if strings.HasPrefix(strings.ToLower(original), "https:") && !strings.HasPrefix(strings.ToLower(original), "https://") {
-		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：https://master.example.com")
+		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：https://example.com")
 	}
 
 	candidate := original

@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.8")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.9")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.8")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.9")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -51,14 +51,14 @@ func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
 }
 
 func TestInstallAgentDryRunDefaultsToBinaryRelease(t *testing.T) {
-	out := runBash(t, "bash install-agent.sh --join abc --master http://1.2.3.4:8080 --dry-run")
+	out := runBash(t, "bash install-agent.sh --join abc --master http://203.0.113.10:8080 --dry-run")
 	for _, want := range []string{
 		"安装模式：binary",
 		"来源：GitHub Releases",
 		"qdr-agent_linux_amd64.tar.gz",
 		"SHA256SUMS",
 		"/usr/local/bin/qdr-agent version",
-		"/usr/local/bin/qdr-agent join --code <已隐藏> --master http://1.2.3.4:8080 --env /etc/quota-dns-router/agent.env",
+		"/usr/local/bin/qdr-agent join --code <已隐藏> --master http://203.0.113.10:8080 --env /etc/quota-dns-router/agent.env",
 	} {
 		assertContains(t, out, want)
 	}
@@ -78,7 +78,7 @@ func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	} {
 		assertContains(t, masterOut, want)
 	}
-	agentOut := runBash(t, "QDR_INSTALL_MODE=source bash install-agent.sh --join abc --master http://1.2.3.4:8080 --dry-run")
+	agentOut := runBash(t, "QDR_INSTALL_MODE=source bash install-agent.sh --join abc --master http://203.0.113.10:8080 --dry-run")
 	for _, want := range []string{
 		"安装模式：source",
 		"来源：GitHub source main",

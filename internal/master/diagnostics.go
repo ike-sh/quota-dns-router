@@ -205,8 +205,10 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 				if summary.Pending {
 					summary.Pending = false
 					summary.RecordID = rec.ID
-					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
+					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, normalizeDNSTTLValue(rec.TTL), rec.Proxied, cfg.AllowOverride)
 				}
+				summary.TTL = normalizeDNSTTLValue(rec.TTL)
+				summary.Proxied = rec.Proxied
 				summary.CurrentIP = rec.Content
 				summary.RecordID = rec.ID
 				_ = store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "✅ DNS 记录查询成功")
@@ -493,7 +495,7 @@ func FormatDNSSummaries(items []DNSSummary) string {
 		b.WriteString("当前 A 记录：" + valueOrDash(item.CurrentIP) + "\n")
 		b.WriteString("匹配节点：" + valueOrDash(item.MatchedNodeName) + "\n")
 		b.WriteString(fmt.Sprintf("proxied：%t\n", item.Proxied))
-		b.WriteString(fmt.Sprintf("TTL：%d\n", item.TTL))
+		b.WriteString("TTL：" + formatDNSTTL(item.TTL) + "\n")
 		b.WriteString("状态：" + valueOrDash(item.Status) + "\n")
 		b.WriteString("最近一次查询/修改结果：" + valueOrDash(item.LastResult) + "\n")
 		if item.LastError != "-" && item.LastError != "" {

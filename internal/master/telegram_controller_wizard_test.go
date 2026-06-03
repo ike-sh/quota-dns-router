@@ -54,6 +54,32 @@ func TestCallbackUsesEditMessageAndAnswersQuery(t *testing.T) {
 	}
 }
 
+func TestStatusCallbackShowsNavigationButtons(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	err := controller.handleUpdate(context.Background(), telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-status",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 89,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "status",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"刷新状态", "返回主菜单", "DNS 配置", "节点管理"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected status payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+	if rec.countPath("/editMessageText") != 1 {
+		t.Fatalf("expected status callback to edit current message, got paths=%v", rec.paths)
+	}
+}
+
 func TestCloudflareTokenCallbackEntersPending(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	if err := controller.handleCallback(context.Background(), 1, "cf_token"); err != nil {
@@ -105,7 +131,7 @@ func TestCloudflareTokenSuccessShowsZoneButtons(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
 		zones: []cloudflare.Zone{
 			{ID: "zone-1", Name: "example.com"},
-			{ID: "zone-2", Name: "example.net"},
+			{ID: "zone-2", Name: "test.example.com"},
 		},
 	})
 	if err := controller.handleCallback(context.Background(), 1, "cf_token"); err != nil {
@@ -117,7 +143,7 @@ func TestCloudflareTokenSuccessShowsZoneButtons(t *testing.T) {
 	if controller.sessions[1] != pendingCloudflareZoneSelect {
 		t.Fatalf("expected pending zone selection, got %q", controller.sessions[1])
 	}
-	for _, want := range []string{"example.com", "example.net", "手动输入 Zone Name"} {
+	for _, want := range []string{"example.com", "test.example.com", "手动输入 Zone Name"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected payload to contain %q, got %v", want, rec.payloads)
 		}
@@ -128,7 +154,7 @@ func TestCloudflareZonePickSavesZone(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
 		zones: []cloudflare.Zone{
 			{ID: "zone-1", Name: "example.com"},
-			{ID: "zone-2", Name: "example.net"},
+			{ID: "zone-2", Name: "test.example.com"},
 		},
 	})
 	ctx := context.Background()
@@ -145,7 +171,7 @@ func TestCloudflareZonePickSavesZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token == "" || zoneName != "example.net" || zoneID != "zone-2" {
+	if token == "" || zoneName != "test.example.com" || zoneID != "zone-2" {
 		t.Fatalf("unexpected cloudflare defaults: token=%q zone=%q zoneID=%q", token, zoneName, zoneID)
 	}
 	if controller.sessions[1] != "" {
@@ -198,6 +224,37 @@ func TestGroupsWizardCreatesGroup(t *testing.T) {
 	}
 }
 
+func TestGroupDetailCanRenameGroup(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "groups_view:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.contains("修改分组名称") {
+		t.Fatalf("expected group detail rename button, got %v", rec.payloads)
+	}
+	if err := controller.handleCallback(ctx, 1, "groups_rename:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "sg"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := controller.Store.GetGroupByID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "sg" {
+		t.Fatalf("expected group renamed to sg, got %+v", updated)
+	}
+	if !rec.contains("分组详情") {
+		t.Fatalf("expected group detail after rename, got %v", rec.payloads)
+	}
+}
+
 func TestNodesWizardCreatesNode(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
@@ -209,7 +266,7 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
 		func() error { return controller.handleText(ctx, 1, "hk-01") },
-		func() error { return controller.handleText(ctx, 1, "1.1.1.1") },
+		func() error { return controller.handleText(ctx, 1, "203.0.113.10") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
 	} {
 		if err := action(); err != nil {
@@ -220,7 +277,7 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if node.GroupID != group.ID || node.PublicIP != "1.1.1.1" || node.Priority != defaultNodePriority {
+	if node.GroupID != group.ID || node.PublicIP != "203.0.113.10" || node.Priority != defaultNodePriority {
 		t.Fatalf("unexpected node: %+v", node)
 	}
 	if node.ThresholdPercent != 80 || node.ResetDay != 1 || node.TrafficMode != db.TrafficModeBoth {
@@ -255,7 +312,7 @@ func TestNodesWizardCreatesNodeWithDNSPrefersAgent(t *testing.T) {
 		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
 		func() error { return controller.handleText(ctx, 1, "hk-01") },
-		func() error { return controller.handleText(ctx, 1, "1.1.1.1") },
+		func() error { return controller.handleText(ctx, 1, "203.0.113.10") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
 	} {
 		if err := action(); err != nil {
@@ -281,7 +338,7 @@ func TestNodesWizardCustomizesPolicyBeforeCreate(t *testing.T) {
 		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
 		func() error { return controller.handleText(ctx, 1, "hk-02") },
-		func() error { return controller.handleText(ctx, 1, "2.2.2.2") },
+		func() error { return controller.handleText(ctx, 1, "198.51.100.10") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_customize_policy") },
 		func() error { return controller.handleText(ctx, 1, "2000GB") },
 		func() error { return controller.handleText(ctx, 1, "85") },
@@ -312,7 +369,7 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 			ID:      "rec-1",
 			Type:    "A",
 			Name:    "hk.example.com",
-			Content: "1.1.1.1",
+			Content: "203.0.113.10",
 			TTL:     120,
 		},
 	})
@@ -324,7 +381,7 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -409,7 +466,7 @@ func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -491,7 +548,7 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 			ID:      "rec-1",
 			Type:    "A",
 			Name:    "hk.example.com",
-			Content: "9.9.9.9",
+			Content: "192.0.2.10",
 			TTL:     120,
 		},
 		updateCalls: &updates,
@@ -504,7 +561,7 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -533,7 +590,7 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 	if controller.sessions[1] != pendingDNSFixSelect {
 		t.Fatalf("expected pending dns fix flow, got %q", controller.sessions[1])
 	}
-	for _, want := range []string{"没有匹配任何已配置节点", "改为指向节点 hk-01 / 1.1.1.1"} {
+	for _, want := range []string{"没有匹配任何已配置节点", "改为指向节点 hk-01 / 203.0.113.10"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected mismatch guidance %q, got %v", want, rec.payloads)
 		}
@@ -544,13 +601,63 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("expected one DNS update call, got %+v", updates)
 	}
-	if updates[0].IP != "1.1.1.1" || updates[0].RecordID != "rec-1" {
+	if updates[0].IP != "203.0.113.10" || updates[0].RecordID != "rec-1" {
 		t.Fatalf("unexpected DNS update call: %+v", updates[0])
 	}
-	for _, want := range []string{"✅ DNS A 记录已更新", "旧 IP：9.9.9.9", "新 IP：1.1.1.1", "Agent 安装"} {
+	for _, want := range []string{"✅ DNS A 记录已更新", "旧 IP：192.0.2.10", "新 IP：203.0.113.10", "Agent 安装"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected DNS repoint payload to contain %q, got %v", want, rec.payloads)
 		}
+	}
+}
+
+func TestDNSDetailShowsTTLAndCanUpdateTTL(t *testing.T) {
+	updates := []dnsUpdateCall{}
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		record: cloudflare.DNSRecord{
+			ID:      "rec-1",
+			Type:    "A",
+			Name:    "hk.example.com",
+			Content: "203.0.113.10",
+			TTL:     60,
+			Proxied: false,
+		},
+		updateCalls: &updates,
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_view:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"修改 TTL", "TTL：60", "修改 proxied"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected dns detail payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_ttl_set:"+group.ID+":1"); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := controller.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TTL != 1 {
+		t.Fatalf("expected TTL updated to auto(1), got %+v", cfg)
+	}
+	if len(updates) != 1 || updates[0].TTL != 1 {
+		t.Fatalf("expected one DNS TTL update call, got %+v", updates)
+	}
+	if !rec.contains("TTL：自动") {
+		t.Fatalf("expected automatic TTL display, got %v", rec.payloads)
 	}
 }
 
@@ -566,6 +673,18 @@ func TestPolicyPanelShowsDefaultStrategyCenter(t *testing.T) {
 	}
 }
 
+func TestPolicyModeMenuShowsBackButtons(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	if err := controller.handleCallback(context.Background(), 1, "policy_mode"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"返回策略设置", "返回主菜单"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected policy mode payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
 func TestNodeDetailShowsPolicyActionsAndTroubleshooting(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
@@ -576,7 +695,7 @@ func TestNodeDetailShowsPolicyActionsAndTroubleshooting(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -610,7 +729,7 @@ func TestNodePolicyEditUpdatesSingleField(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -681,7 +800,7 @@ func TestPolicyThresholdWizardUpdatesPolicy(t *testing.T) {
 func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
-	if err := controller.Store.SetMasterPublicURL(ctx, "https://master.example.com"); err != nil {
+	if err := controller.Store.SetMasterPublicURL(ctx, "https://example.com"); err != nil {
 		t.Fatal(err)
 	}
 	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
@@ -691,7 +810,7 @@ func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -714,7 +833,7 @@ func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"install-agent.sh", "--join", "30 分钟", "当前分组还没有 DNS A 记录", "节点：hk-01", "分组：hk", "Master：https://master.example.com"} {
+	for _, want := range []string{"显示纯安装命令", "显示纯卸载命令", "30 分钟", "当前分组还没有 DNS A 记录", "节点：hk-01", "分组：hk", "Master：https://example.com"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected install command payload to contain %q, got %v", want, rec.payloads)
 		}
@@ -724,7 +843,7 @@ func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
-	if err := controller.Store.SetMasterPublicURL(ctx, "https://master.example.com"); err != nil {
+	if err := controller.Store.SetMasterPublicURL(ctx, "https://example.com"); err != nil {
 		t.Fatal(err)
 	}
 	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
@@ -734,7 +853,7 @@ func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	node, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -751,14 +870,14 @@ func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	if !rec.contains("显示纯命令") {
+	if !rec.contains("显示纯安装命令") {
 		t.Fatalf("expected copy button in agent command menu, got %v", rec.payloads)
 	}
 	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
 	got := strings.TrimSpace(rec.messages[len(rec.messages)-1])
-	for _, want := range []string{"install-agent.sh", "--join", "--master https://master.example.com"} {
+	for _, want := range []string{"install-agent.sh", "--join", "--master https://example.com"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected pure command to contain %q, got %q", want, got)
 		}
@@ -772,7 +891,7 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 			ID:      "rec-1",
 			Type:    "A",
 			Name:    "hk.example.com",
-			Content: "1.1.1.1",
+			Content: "203.0.113.10",
 			TTL:     120,
 		},
 		updateCalls: &updates,
@@ -785,7 +904,7 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 	oldNode, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -802,7 +921,7 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 	newNode, err := controller.Store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-02",
-		PublicIP:              "2.2.2.2",
+		PublicIP:              "198.51.100.10",
 		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -837,7 +956,7 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 	if len(updates) != 1 {
 		t.Fatalf("expected one dns update call, got %+v", updates)
 	}
-	if updates[0].IP != "2.2.2.2" || updates[0].RecordID != "rec-1" {
+	if updates[0].IP != "198.51.100.10" || updates[0].RecordID != "rec-1" {
 		t.Fatalf("unexpected dns update call: %+v", updates[0])
 	}
 	history, err := controller.Store.GetLatestSwitchHistory(ctx)
@@ -856,7 +975,7 @@ func newTestTelegramControllerWithDNS(t *testing.T, dns DNSProvider) (*TelegramC
 	t.Helper()
 	store := testMasterStore(t)
 	ctx := context.Background()
-	if err := store.SetSetting(ctx, settingSuggestedPublicAPIURL, "http://5.6.7.8:8080"); err != nil {
+	if err := store.SetSetting(ctx, settingSuggestedPublicAPIURL, "http://198.51.100.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	rec := &recordingTelegramClient{}

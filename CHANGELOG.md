@@ -1,13 +1,14 @@
 # CHANGELOG
 
-## 0.1.0-alpha.8
+## 0.1.0-alpha.9
 
-- Telegram 初始化流程调整为 DNS 优先：Cloudflare 完成后优先引导配置 DNS A 记录；没有分组时自动创建 `default`，没有节点时可先保存“待绑定”记录名。
-- callback 场景优先使用 `editMessageText` 更新当前面板，减少反复点按钮带来的刷屏；同时继续保留 `answerCallbackQuery` 和失败后的 send fallback。
-- 新增手动切换面板与节点详情快捷入口，切换历史写入 `trigger_type`，`/status` 最近切换会显示手动/自动触发类型。
-- 节点详情页新增单字段策略编辑面板，可单独修改月流量、阈值、统计模式、重置日、priority，以及启用/自动切换开关。
-- Agent 命令页拆分为“带说明预览”和“显示纯命令”，并补充 Agent 卸载命令；Master / Agent 安装脚本完成后都会直接打印卸载与 purge 命令。
-- 版本升级到 `0.1.0-alpha.8`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和测试。
+- Telegram 状态页在按钮入口下改为带导航的状态面板，支持“刷新状态 / DNS 配置 / 节点管理 / 返回主菜单”，并继续优先使用 `editMessageText` 更新当前消息。
+- 分组管理新增分组详情与改名流程，`/groups rename <old> <new>` 继续保留兼容命令；分组详情可直接跳转到该组 DNS 或节点列表。
+- DNS 管理新增详情页，支持修改域名、TTL、proxied，以及把记录改为指向某个节点；TTL 默认值改为 `60`，并支持 `1/auto` 自动 TTL。
+- Agent 命令页改为“说明预览 + 纯安装命令 / 纯卸载命令”双层交互，便于在 Telegram 客户端里直接长按复制。
+- 仓库内示例域名和示例 IP 全部统一为 `example.com` / `hk.example.com` 等占位值与 RFC 保留网段，并新增扫描测试防止旧示例残留。
+- 统计模式、TTL 等选择页补齐回退入口，减少流程中断后只能依赖 `/cancel` 退出的情况。
+- 版本升级到 `0.1.0-alpha.9`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和测试。
 
 ## 0.1.0-alpha.7
 

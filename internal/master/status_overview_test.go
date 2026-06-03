@@ -13,15 +13,15 @@ func TestStatusReportRecentSwitchSummary(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
 	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
-	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", db.SwitchTriggerThreshold, "流量达到阈值", "success", ""); err != nil {
+	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "203.0.113.10", "198.51.100.10", db.SwitchTriggerThreshold, "流量达到阈值", "success", ""); err != nil {
 		t.Fatal(err)
 	}
-	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())
+	overview, err := BuildStatusOverview(ctx, store, "https://example.com", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	text := FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras())
-	for _, want := range []string{"最近切换", "分组：hk", "域名：hk.example.com", "触发类型：自动（阈值）", "hk-01 / 1.1.1.1 -> hk-02 / 2.2.2.2"} {
+	for _, want := range []string{"最近切换", "分组：hk", "域名：hk.example.com", "触发类型：自动（阈值）", "hk-01 / 203.0.113.10 -> hk-02 / 198.51.100.10"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected status report to contain %q: %s", want, text)
 		}
@@ -41,7 +41,7 @@ func TestStatusReportShowsPendingDNSBinding(t *testing.T) {
 	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", 120, false, true); err != nil {
 		t.Fatal(err)
 	}
-	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())
+	overview, err := BuildStatusOverview(ctx, store, "https://example.com", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,10 +55,10 @@ func TestStatusReportRecentFailureSummary(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
 	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
-	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", db.SwitchTriggerThreshold, "流量达到阈值", "failed", "Cloudflare 返回 403 token=cf_secret_abcd", "cf_secret_abcd"); err != nil {
+	if err := store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "203.0.113.10", "198.51.100.10", db.SwitchTriggerThreshold, "流量达到阈值", "failed", "Cloudflare 返回 403 token=cf_secret_abcd", "cf_secret_abcd"); err != nil {
 		t.Fatal(err)
 	}
-	overview, err := BuildStatusOverview(ctx, store, "https://master.example.com", nil, time.Now())
+	overview, err := BuildStatusOverview(ctx, store, "https://example.com", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -82,7 +82,7 @@ func TestStatusRiskPriorityOrder(t *testing.T) {
 		},
 		DNS: []DNSSummary{{
 			GroupName:     "hk",
-			CurrentIP:     "9.9.9.9",
+			CurrentIP:     "192.0.2.10",
 			IPMatchesNode: false,
 		}},
 		Groups: []GroupDiagnostic{{
@@ -150,11 +150,11 @@ func TestStatusRiskDNSIPMismatch(t *testing.T) {
 		Cloudflare: CloudflareSummary{Verified: true},
 		DNS: []DNSSummary{{
 			GroupName:     "hk",
-			CurrentIP:     "9.9.9.9",
+			CurrentIP:     "192.0.2.10",
 			IPMatchesNode: false,
 		}},
 	})
-	assertRiskContains(t, risks, "DNS 当前 IP 9.9.9.9 不匹配任何节点")
+	assertRiskContains(t, risks, "DNS 当前 IP 192.0.2.10 不匹配任何节点")
 }
 
 func TestStatusRiskNodeReachedThreshold(t *testing.T) {
@@ -178,7 +178,7 @@ func TestStatusRiskNodeOffline(t *testing.T) {
 func TestStatusRiskPendingTasks(t *testing.T) {
 	risks := BuildStatusRiskSummary(StatusRiskInput{
 		Setup: SetupStatus{
-			PublicAPIURL:              "https://master.example.com",
+			PublicAPIURL:              "https://example.com",
 			PublicURLConfigured:       true,
 			CloudflareTokenConfigured: true,
 			ZoneName:                  "example.com",
@@ -208,7 +208,7 @@ func createSwitchFixture(t *testing.T, ctx context.Context, store *db.Store) (db
 	oldNode, err := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -225,7 +225,7 @@ func createSwitchFixture(t *testing.T, ctx context.Context, store *db.Store) (db
 	newNode, err := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-02",
-		PublicIP:              "2.2.2.2",
+		PublicIP:              "198.51.100.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -244,7 +244,7 @@ func createSwitchFixture(t *testing.T, ctx context.Context, store *db.Store) (db
 
 func baseHealthyRiskSetup() SetupStatus {
 	return SetupStatus{
-		PublicAPIURL:              "https://master.example.com",
+		PublicAPIURL:              "https://example.com",
 		PublicURLConfigured:       true,
 		CloudflareTokenConfigured: true,
 		ZoneName:                  "example.com",

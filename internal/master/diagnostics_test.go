@@ -98,7 +98,7 @@ func TestDNSSummaryOutput(t *testing.T) {
 	_, _ = store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -112,7 +112,7 @@ func TestDNSSummaryOutput(t *testing.T) {
 	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
 	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", 60, false, true)
 	items, err := BuildDNSSummaries(ctx, store, fakeDNS{
-		record: cloudflare.DNSRecord{ID: "r1", Type: "A", Name: "hk.example.com", Content: "1.1.1.1", TTL: 60},
+		record: cloudflare.DNSRecord{ID: "r1", Type: "A", Name: "hk.example.com", Content: "203.0.113.10", TTL: 60},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestNodeDiagnosticsThreshold(t *testing.T) {
 	node, _ := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -145,7 +145,7 @@ func TestNodeDiagnosticsThreshold(t *testing.T) {
 	_ = store.SaveAgentReport(ctx, db.AgentReport{
 		AgentID:      "agent-1",
 		Hostname:     "host",
-		PublicIP:     "1.1.1.1",
+		PublicIP:     "203.0.113.10",
 		Iface:        "eth0",
 		RXBytesTotal: 900,
 		TXBytesTotal: 0,
@@ -175,7 +175,7 @@ func TestGroupDiagnosticsAvailableTargets(t *testing.T) {
 	node1, _ := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -189,7 +189,7 @@ func TestGroupDiagnosticsAvailableTargets(t *testing.T) {
 	node2, _ := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-02",
-		PublicIP:              "2.2.2.2",
+		PublicIP:              "198.51.100.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -208,7 +208,7 @@ func TestGroupDiagnosticsAvailableTargets(t *testing.T) {
 	_ = store.SaveAgentReport(ctx, db.AgentReport{
 		AgentID:      "agent-2",
 		Hostname:     "host",
-		PublicIP:     "2.2.2.2",
+		PublicIP:     "198.51.100.10",
 		Iface:        "eth0",
 		RXBytesTotal: 100,
 		TXBytesTotal: 0,
@@ -219,7 +219,7 @@ func TestGroupDiagnosticsAvailableTargets(t *testing.T) {
 		Status:       "online",
 	})
 	items, err := BuildGroupDiagnostics(ctx, store, time.Now(), fakeDNS{
-		record: cloudflare.DNSRecord{ID: "r1", Type: "A", Name: "hk.example.com", Content: "1.1.1.1", TTL: 60},
+		record: cloudflare.DNSRecord{ID: "r1", Type: "A", Name: "hk.example.com", Content: "203.0.113.10", TTL: 60},
 	})
 	if err != nil {
 		t.Fatal(err)

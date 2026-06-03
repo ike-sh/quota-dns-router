@@ -2,7 +2,7 @@
 
 `quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
 
-当前版本：`0.1.0-alpha.8`
+当前版本：`0.1.0-alpha.9`
 
 本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。
 
@@ -85,8 +85,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main
 支持：
 
 ```text
-http://1.2.3.4:8080
-https://domain.example.com
+http://203.0.113.10:8080
+https://example.com
 ```
 
 ## 配置 Master 公网地址
@@ -116,7 +116,7 @@ https://domain.example.com
 http://服务器公网IP:8080
 ```
 
-如果 Master 前面有反代或 HTTPS 域名，应配置 `https://domain.example.com`。如果服务器安全组没有放行 8080，Agent 无法连接。`127.0.0.1` 只适合本机调试，不适合 Agent 部署。
+如果 Master 前面有反代或 HTTPS 域名，应配置 `https://example.com`。如果服务器安全组没有放行 8080，Agent 无法连接。`127.0.0.1` 只适合本机调试，不适合 Agent 部署。
 
 ## Telegram 初始化流程
 
@@ -249,13 +249,13 @@ Token 只通过 Telegram `/cf` 配置，展示时会脱敏，不会写入按钮 
 Bot 会生成类似命令：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxxxx --master https://master.example.com
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxxxx --master https://example.com
 ```
 
 建议直接使用 Telegram 生成的完整命令。脚本也支持通过环境变量提供 Master 地址，或显式传入：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join <Telegram生成的join_code> --master https://master.example.com
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join <Telegram生成的join_code> --master https://example.com
 ```
 
 如果当前分组还没有 DNS A 记录，Bot 仍可生成 Agent 命令，但会明确提示“可以先安装，自动切换暂时不会生效”，避免把初始化流程卡死在最后一步。

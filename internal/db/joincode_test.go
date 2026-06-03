@@ -17,7 +17,7 @@ func TestRedeemJoinCodeExpired(t *testing.T) {
 	node, err := store.CreateNode(ctx, Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     100,
 		ThresholdPercent:      80,
 		ResetDay:              1,

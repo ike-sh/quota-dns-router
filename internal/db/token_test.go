@@ -17,7 +17,7 @@ func TestValidateAgentToken(t *testing.T) {
 	node, err := store.CreateNode(ctx, Node{
 		GroupID:               group.ID,
 		Name:                  "sg-01",
-		PublicIP:              "2.2.2.2",
+		PublicIP:              "198.51.100.10",
 		MonthlyQuotaBytes:     100,
 		ThresholdPercent:      80,
 		ResetDay:              1,

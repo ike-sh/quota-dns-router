@@ -19,7 +19,7 @@ func TestValidateNodeConfig(t *testing.T) {
 	valid := db.Node{
 		GroupID:               "grp-1",
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,

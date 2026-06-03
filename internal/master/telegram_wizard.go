@@ -23,6 +23,7 @@ const (
 	pendingCloudflareZoneName   = "cloudflare_zone_name"
 	pendingCloudflareZoneSelect = "cloudflare_zone_select"
 	pendingDNSRecordName        = "dns_record_name"
+	pendingDNSTTL               = "dns_ttl"
 	pendingDNSFixSelect         = "dns_fix_select"
 	pendingGroupName            = "group_name"
 	pendingNodeName             = "node_name"
@@ -36,7 +37,7 @@ const (
 	pendingPolicyValue          = "policy_value"
 	sessionSwitchNotice         = "已切换到新的配置流程。"
 	defaultNodePriority         = 10
-	defaultDNSRecordTTL         = 120
+	defaultDNSRecordTTL         = 60
 	defaultDNSRecordProxied     = false
 	policyFieldThreshold        = "threshold"
 	policyFieldQuota            = "quota"
@@ -73,6 +74,8 @@ type telegramSessionMeta struct {
 
 func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID int64, data string) (bool, error) {
 	switch {
+	case data == "status_refresh":
+		return true, c.sendStatus(ctx, chatID)
 	case data == "menu":
 		return true, c.sendMenu(ctx, chatID)
 	case data == "cf_token":
@@ -100,8 +103,59 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 		return true, c.sendDNSPanel(ctx, chatID, c.replaceSession(chatID))
 	case data == "dns_status":
 		return true, c.sendDNSStatus(ctx, chatID)
+	case strings.HasPrefix(data, "dns_view:"):
+		groupID := strings.TrimPrefix(data, "dns_view:")
+		return true, c.sendDNSDetail(ctx, chatID, groupID, "")
 	case data == "dns_add":
 		return true, c.startDNSWizard(ctx, chatID, c.replaceSession(chatID))
+	case strings.HasPrefix(data, "dns_edit_name:"):
+		groupID := strings.TrimPrefix(data, "dns_edit_name:")
+		return true, c.startDNSRecordPrompt(ctx, chatID, groupID)
+	case strings.HasPrefix(data, "dns_edit_ttl:"):
+		groupID := strings.TrimPrefix(data, "dns_edit_ttl:")
+		return true, c.sendDNSTTLMenu(ctx, chatID, groupID, "")
+	case strings.HasPrefix(data, "dns_ttl_set:"):
+		payload := strings.TrimPrefix(data, "dns_ttl_set:")
+		parts := strings.SplitN(payload, ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "TTL 参数已失效，请重新选择。", nil)
+		}
+		ttl, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return true, c.sendMessageOrEdit(ctx, chatID, "TTL 参数无效，请重新选择。", nil)
+		}
+		return true, c.updateDNSTTL(ctx, chatID, parts[0], ttl)
+	case strings.HasPrefix(data, "dns_ttl_custom:"):
+		groupID := strings.TrimPrefix(data, "dns_ttl_custom:")
+		prefix := c.beginFlow(chatID, pendingDNSTTL, map[string]string{sessionKeyGroupID: groupID})
+		return true, c.sendMessageOrEdit(ctx, chatID, prefix+"请发送新的 TTL，支持：60、120、300、1 或 auto。\n\n发送 /cancel 取消。", dnsTTLMenu(groupID))
+	case strings.HasPrefix(data, "dns_edit_proxied:"):
+		groupID := strings.TrimPrefix(data, "dns_edit_proxied:")
+		return true, c.sendDNSProxiedMenu(ctx, chatID, groupID, "")
+	case strings.HasPrefix(data, "dns_proxied:"):
+		payload := strings.TrimPrefix(data, "dns_proxied:")
+		parts := strings.SplitN(payload, ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "proxied 参数已失效，请重新选择。", nil)
+		}
+		return true, c.updateDNSProxied(ctx, chatID, parts[0], parseBool(parts[1], false))
+	case strings.HasPrefix(data, "dns_repoint_menu:"):
+		groupID := strings.TrimPrefix(data, "dns_repoint_menu:")
+		return true, c.sendDNSRepointMenu(ctx, chatID, groupID, "")
+	case strings.HasPrefix(data, "dns_repoint_pick:"):
+		payload := strings.TrimPrefix(data, "dns_repoint_pick:")
+		parts := strings.SplitN(payload, ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "DNS 切换参数已失效，请重新选择。", nil)
+		}
+		return true, c.sendDNSRepointConfirm(ctx, chatID, parts[0], parts[1], "")
+	case strings.HasPrefix(data, "dns_repoint_do:"):
+		payload := strings.TrimPrefix(data, "dns_repoint_do:")
+		parts := strings.SplitN(payload, ":", 2)
+		if len(parts) != 2 {
+			return true, c.sendMessageOrEdit(ctx, chatID, "DNS 切换参数已失效，请重新选择。", nil)
+		}
+		return true, c.handleDNSRepointSwitch(ctx, chatID, parts[0], parts[1])
 	case data == "dns_new_group":
 		prefix := c.beginFlow(chatID, pendingGroupName, nil)
 		return true, c.sendGroupNamePrompt(ctx, chatID, prefix)
@@ -148,6 +202,15 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 		return true, c.sendGroupsPanel(ctx, chatID, c.replaceSession(chatID))
 	case data == "groups_status":
 		return true, c.sendGroupsStatus(ctx, chatID)
+	case strings.HasPrefix(data, "groups_view:"):
+		groupID := strings.TrimPrefix(data, "groups_view:")
+		return true, c.sendGroupDetail(ctx, chatID, groupID, "")
+	case strings.HasPrefix(data, "groups_rename:"):
+		groupID := strings.TrimPrefix(data, "groups_rename:")
+		return true, c.startGroupRenamePrompt(ctx, chatID, groupID)
+	case strings.HasPrefix(data, "groups_nodes:"):
+		groupID := strings.TrimPrefix(data, "groups_nodes:")
+		return true, c.sendGroupNodes(ctx, chatID, groupID, "")
 	case data == "groups_new":
 		prefix := c.beginFlow(chatID, pendingGroupName, nil)
 		return true, c.sendGroupNamePrompt(ctx, chatID, prefix)
@@ -259,6 +322,8 @@ func (c *TelegramController) handlePendingInput(ctx context.Context, chatID int6
 		return c.sendMessageOrEdit(ctx, chatID, "请点击 Zone 按钮，或选择“手动输入 Zone Name”。", cloudflareZoneChoicesMenu(c.sessionZones(chatID)))
 	case pendingDNSRecordName:
 		return c.handleDNSRecordNameInput(ctx, chatID, text)
+	case pendingDNSTTL:
+		return c.handleDNSTTLInput(ctx, chatID, text)
 	case pendingDNSFixSelect:
 		return c.sendMessageOrEdit(ctx, chatID, "请点击按钮选择 DNS 处理方式。", dnsFixMenu(nil))
 	case pendingGroupName:
@@ -272,7 +337,7 @@ func (c *TelegramController) handlePendingInput(ctx context.Context, chatID int6
 	case pendingNodeThreshold:
 		return c.handleNodeThresholdValue(ctx, chatID, text)
 	case pendingNodeModeSelect:
-		return c.sendMessageOrEdit(ctx, chatID, "请点击统计模式按钮继续。", nodeTrafficModeMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "请点击统计模式按钮继续。", c.nodeTrafficModeMenu(chatID))
 	case pendingNodeResetDay:
 		return c.handleNodeResetDayValue(ctx, chatID, text)
 	case pendingNodePriority:
@@ -513,9 +578,15 @@ func (c *TelegramController) sendDNSPanel(ctx context.Context, chatID int64, pre
 	text += fmt.Sprintf("已配置 DNS A 记录：%d\n", count)
 	if count == 0 {
 		text += "建议：先为分组添加第一条 DNS A 记录，再继续生成 Agent 安装命令。\n"
+	} else {
+		text += "点击下面的 DNS 记录可查看详情并修改域名、TTL、proxied 或指向节点。\n"
 	}
 	text += "\n请选择操作："
-	return c.sendMessageOrEdit(ctx, chatID, text, dnsPanelMenu())
+	items, err := BuildDNSSummaries(ctx, c.Store, c.DNS)
+	if err != nil {
+		return err
+	}
+	return c.sendMessageOrEdit(ctx, chatID, text, dnsPanelMenu(items...))
 }
 
 func (c *TelegramController) sendDNSStatus(ctx context.Context, chatID int64) error {
@@ -523,7 +594,7 @@ func (c *TelegramController) sendDNSStatus(ctx context.Context, chatID int64) er
 	if err != nil {
 		return err
 	}
-	return c.sendMessageOrEdit(ctx, chatID, FormatDNSSummaries(items), dnsPanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, FormatDNSSummaries(items), dnsPanelMenu(items...))
 }
 
 func (c *TelegramController) startDNSWizard(ctx context.Context, chatID int64, prefix string) error {
@@ -587,6 +658,12 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 	if err != nil {
 		return err
 	}
+	ttl := defaultDNSRecordTTL
+	proxied := defaultDNSRecordProxied
+	if existing, cfgErr := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID); cfgErr == nil {
+		ttl = normalizeDNSTTLValue(existing.TTL)
+		proxied = existing.Proxied
+	}
 	recordName := normalizeDNSRecordName(text, zoneName)
 	if recordName == "" {
 		c.setSession(chatID, pendingDNSRecordName)
@@ -611,7 +688,7 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 	}
 	record, err := c.DNS.LookupDNSRecord(ctx, token, zoneID, recordName)
 	if err == nil {
-		cfg, saveErr := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, defaultDNSRecordTTL, defaultDNSRecordProxied, true)
+		cfg, saveErr := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, normalizeDNSTTLValue(record.TTL), record.Proxied, true)
 		if saveErr != nil {
 			return saveErr
 		}
@@ -657,7 +734,7 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 		return err
 	}
 	if len(nodes) == 0 {
-		cfg, saveErr := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, "", defaultDNSRecordTTL, defaultDNSRecordProxied, true)
+		cfg, saveErr := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, "", ttl, proxied, true)
 		if saveErr != nil {
 			return saveErr
 		}
@@ -689,10 +766,16 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 	if err != nil {
 		return err
 	}
+	ttl := defaultDNSRecordTTL
+	proxied := defaultDNSRecordProxied
+	if existing, cfgErr := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID); cfgErr == nil {
+		ttl = normalizeDNSTTLValue(existing.TTL)
+		proxied = existing.Proxied
+	}
 	if c.DNS == nil || strings.TrimSpace(zoneID) == "" {
 		return c.sendMessageOrEdit(ctx, chatID, "当前进程未配置 Cloudflare 客户端，无法创建 DNS 记录。", dnsPanelMenu())
 	}
-	record, err := c.DNS.CreateDNSRecord(ctx, token, zoneID, recordName, node.PublicIP, defaultDNSRecordTTL, defaultDNSRecordProxied)
+	record, err := c.DNS.CreateDNSRecord(ctx, token, zoneID, recordName, node.PublicIP, ttl, proxied)
 	if err != nil {
 		msg := friendlyCloudflareError(err)
 		_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(group.ID), "❌ DNS 创建失败")
@@ -700,7 +783,7 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 		c.setSession(chatID, pendingDNSRecordName)
 		return c.sendMessageOrEdit(ctx, chatID, "创建 DNS 记录失败："+msg, nil)
 	}
-	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, defaultDNSRecordTTL, defaultDNSRecordProxied, true)
+	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, normalizeDNSTTLValue(record.TTL), record.Proxied, true)
 	if err != nil {
 		return err
 	}
@@ -840,12 +923,18 @@ func (c *TelegramController) sendSwitchConfirm(ctx context.Context, chatID int64
 }
 
 func (c *TelegramController) sendGroupsPanel(ctx context.Context, chatID int64, prefix string) error {
-	count, err := c.Store.CountGroups(ctx)
+	groups, err := c.Store.ListGroups(ctx)
 	if err != nil {
 		return err
 	}
-	text := fmt.Sprintf("%s📦 分组管理\n\n当前分组：%d\n\n请选择操作：", prefix, count)
-	return c.sendMessageOrEdit(ctx, chatID, text, groupsPanelMenu())
+	text := fmt.Sprintf("%s📦 分组管理\n\n当前分组：%d\n", prefix, len(groups))
+	if len(groups) == 0 {
+		text += "\n还没有分组，请先创建分组。"
+	} else {
+		text += "\n点击下面的分组可查看详情、修改名称或进入该分组的 DNS/节点。"
+	}
+	text += "\n\n请选择操作："
+	return c.sendMessageOrEdit(ctx, chatID, text, groupsPanelMenu(groups...))
 }
 
 func (c *TelegramController) ensureDefaultGroup(ctx context.Context) (db.Group, error) {
@@ -868,7 +957,11 @@ func (c *TelegramController) sendGroupsStatus(ctx context.Context, chatID int64)
 	if err != nil {
 		return err
 	}
-	return c.sendMessageOrEdit(ctx, chatID, FormatGroupDiagnostics(items), groupsPanelMenu())
+	groups, err := c.Store.ListGroups(ctx)
+	if err != nil {
+		return err
+	}
+	return c.sendMessageOrEdit(ctx, chatID, FormatGroupDiagnostics(items), groupsPanelMenu(groups...))
 }
 
 func (c *TelegramController) sendGroupNamePrompt(ctx context.Context, chatID int64, prefix string) error {
@@ -881,6 +974,18 @@ func (c *TelegramController) handleGroupNameInput(ctx context.Context, chatID in
 	if err := ValidateGroupName(groupName); err != nil {
 		c.setSession(chatID, pendingGroupName)
 		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送分组名。", nil)
+	}
+	if groupID := c.currentSessionValue(chatID, sessionKeyGroupID); groupID != "" {
+		if _, err := c.Store.GetGroupByID(ctx, groupID); err != nil {
+			c.clearSession(chatID)
+			return c.sendMessageOrEdit(ctx, chatID, "分组已失效，请重新选择。", groupsPanelMenu())
+		}
+		if err := c.Store.UpdateGroupName(ctx, groupID, groupName); err != nil {
+			c.setSession(chatID, pendingGroupName)
+			return c.sendMessageOrEdit(ctx, chatID, "❌ 修改分组名称失败："+err.Error()+"\n\n请换一个分组名重试。", nil)
+		}
+		c.clearSession(chatID)
+		return c.sendGroupDetail(ctx, chatID, groupID, "✅ 分组名称已更新。\n\n")
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
@@ -1036,7 +1141,7 @@ func (c *TelegramController) startNodePolicyFieldEdit(ctx context.Context, chatI
 		return c.sendMessageOrEdit(ctx, chatID, "请发送新的阈值百分比，例如：80 或 80%。", nodeThresholdMenu())
 	case nodeEditFieldMode:
 		c.setSession(chatID, pendingNodeModeSelect)
-		return c.sendMessageOrEdit(ctx, chatID, "请选择新的统计模式：", nodeTrafficModeMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "请选择新的统计模式：", c.nodeTrafficModeMenu(chatID))
 	case nodeEditFieldResetDay:
 		c.setSession(chatID, pendingNodeResetDay)
 		return c.sendMessageOrEdit(ctx, chatID, "请发送新的重置日（1-28）。", nodeResetDayMenu())
@@ -1129,7 +1234,7 @@ func (c *TelegramController) handleNodeThresholdValue(ctx context.Context, chatI
 		return c.saveNodePolicyFieldEdit(ctx, chatID, "✅ 阈值已更新。\n\n")
 	}
 	c.setSession(chatID, pendingNodeModeSelect)
-	return c.sendMessageOrEdit(ctx, chatID, "请选择统计模式：", nodeTrafficModeMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "请选择统计模式：", c.nodeTrafficModeMenu(chatID))
 }
 
 func (c *TelegramController) handleNodeModeChoice(ctx context.Context, chatID int64, mode string) error {
@@ -1556,13 +1661,14 @@ func cloudflareZoneMenu() *telegram.ReplyMarkup {
 }
 
 func cloudflareZoneChoicesMenu(zones []cloudflare.Zone) *telegram.ReplyMarkup {
-	rows := make([][]telegram.InlineKeyboardButton, 0, len(zones)+2)
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(zones)+3)
 	for i, zone := range zones {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: zone.Name, CallbackData: fmt.Sprintf("cf_zone_pick:%d", i)}})
 	}
 	rows = append(rows,
 		[]telegram.InlineKeyboardButton{{Text: "手动输入 Zone Name", CallbackData: "cf_zone_manual"}},
 		[]telegram.InlineKeyboardButton{{Text: "重新输入 Token", CallbackData: "cf_token_reset"}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
 	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
@@ -1574,12 +1680,23 @@ func cloudflareSavedMenu() *telegram.ReplyMarkup {
 	}}
 }
 
-func dnsPanelMenu() *telegram.ReplyMarkup {
-	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+func dnsPanelMenu(items ...DNSSummary) *telegram.ReplyMarkup {
+	rows := [][]telegram.InlineKeyboardButton{
 		{{Text: "添加 DNS A 记录", CallbackData: "dns_add"}},
 		{{Text: "查看 DNS 状态", CallbackData: "dns_status"}},
-		{{Text: "返回主菜单", CallbackData: "menu"}},
-	}}
+	}
+	for _, item := range items {
+		label := item.GroupName
+		if strings.TrimSpace(item.RecordName) != "" {
+			label += " / " + item.RecordName
+		}
+		if item.Pending {
+			label += "（待绑定）"
+		}
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: label, CallbackData: "dns_view:" + item.GroupID}})
+	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}})
+	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
 func dnsNoGroupMenu() *telegram.ReplyMarkup {
@@ -1632,11 +1749,14 @@ func dnsFixMenu(nodes []db.Node) *telegram.ReplyMarkup {
 }
 
 func dnsGroupMenu(groups []db.Group) *telegram.ReplyMarkup {
-	rows := make([][]telegram.InlineKeyboardButton, 0, len(groups)+1)
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(groups)+2)
 	for _, group := range groups {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: group.Name, CallbackData: "dns_group:" + group.ID}})
 	}
-	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "新建分组", CallbackData: "groups_new"}})
+	rows = append(rows,
+		[]telegram.InlineKeyboardButton{{Text: "新建分组", CallbackData: "groups_new"}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
+	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
@@ -1645,7 +1765,7 @@ func dnsNodeMenu(nodes []db.Node) *telegram.ReplyMarkup {
 	for _, node := range nodes {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: node.Name + " / " + node.PublicIP, CallbackData: "dns_create:" + node.ID}})
 	}
-	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "取消", CallbackData: "menu"}})
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回 DNS 列表", CallbackData: "dns"}})
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
@@ -1683,15 +1803,20 @@ func manualSwitchDoneMenu(nodeID string) *telegram.ReplyMarkup {
 		{{Text: "继续手动切换", CallbackData: "switch"}},
 		{{Text: "查看节点详情", CallbackData: "nodes_view:" + nodeID}},
 		{{Text: "当前状态", CallbackData: "status"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
-func groupsPanelMenu() *telegram.ReplyMarkup {
-	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+func groupsPanelMenu(groups ...db.Group) *telegram.ReplyMarkup {
+	rows := [][]telegram.InlineKeyboardButton{
 		{{Text: "新建分组", CallbackData: "groups_new"}},
 		{{Text: "查看分组状态", CallbackData: "groups_status"}},
-		{{Text: "返回主菜单", CallbackData: "menu"}},
-	}}
+	}
+	for _, group := range groups {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: group.Name, CallbackData: "groups_view:" + group.ID}})
+	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}})
+	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
 func groupCreatedMenu() *telegram.ReplyMarkup {
@@ -1725,42 +1850,39 @@ func nodesNeedGroupMenu() *telegram.ReplyMarkup {
 }
 
 func nodesGroupMenu(groups []db.Group) *telegram.ReplyMarkup {
-	rows := make([][]telegram.InlineKeyboardButton, 0, len(groups))
+	rows := make([][]telegram.InlineKeyboardButton, 0, len(groups)+1)
 	for _, group := range groups {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: group.Name, CallbackData: "nodes_group:" + group.ID}})
 	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}})
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
 func nodeQuotaMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "1000GB", CallbackData: "nodes_quota_default"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
 func nodeThresholdMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "80%", CallbackData: "nodes_threshold_default"}},
-	}}
-}
-
-func nodeTrafficModeMenu() *telegram.ReplyMarkup {
-	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
-		{{Text: "RX 下行", CallbackData: "nodes_mode:rx"}},
-		{{Text: "TX 上行", CallbackData: "nodes_mode:tx"}},
-		{{Text: "RX+TX 双向", CallbackData: "nodes_mode:both"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
 func nodeResetDayMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "1", CallbackData: "nodes_reset_day_default"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
 func nodePriorityMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "10", CallbackData: "nodes_priority_default"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
@@ -1813,6 +1935,8 @@ func policyModeMenu() *telegram.ReplyMarkup {
 		{{Text: "RX 下行", CallbackData: "policy_mode:rx"}},
 		{{Text: "TX 上行", CallbackData: "policy_mode:tx"}},
 		{{Text: "RX+TX 双向", CallbackData: "policy_mode:both"}},
+		{{Text: "返回策略设置", CallbackData: "policy"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
 
@@ -1851,11 +1975,12 @@ func agentCommandMenu(nodeID string, hasDNS bool) *telegram.ReplyMarkup {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "配置 DNS", CallbackData: "dns"}})
 	}
 	rows = append(rows,
-		[]telegram.InlineKeyboardButton{{Text: "显示纯命令", CallbackData: "agent_copy:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "显示纯安装命令", CallbackData: "agent_copy:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "重新生成命令", CallbackData: "agent_node:" + nodeID}},
-		[]telegram.InlineKeyboardButton{{Text: "显示卸载命令", CallbackData: "agent_uninstall_copy:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "显示纯卸载命令", CallbackData: "agent_uninstall_copy:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "安装排查", CallbackData: "agent_troubleshoot:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
 	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
@@ -1883,7 +2008,10 @@ func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarku
 	if !hasReported || !online {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "查看安装排查", CallbackData: "agent_troubleshoot:" + node.ID}})
 	}
-	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回节点列表", CallbackData: "nodes"}})
+	rows = append(rows,
+		[]telegram.InlineKeyboardButton{{Text: "返回节点列表", CallbackData: "nodes"}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
+	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 

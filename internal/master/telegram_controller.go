@@ -218,6 +218,19 @@ func (c *TelegramController) handleGroupsCommand(ctx context.Context, chatID int
 	if len(parts) == 1 {
 		return c.sendGroupsPanel(ctx, chatID, c.replaceSession(chatID))
 	}
+	if len(parts) >= 4 && parts[1] == "rename" {
+		group, err := c.Store.GetGroupByName(ctx, parts[2])
+		if err != nil {
+			return c.sendMessageOrEdit(ctx, chatID, "分组不存在，请先确认原分组名。", nil)
+		}
+		if err := ValidateGroupName(parts[3]); err != nil {
+			return c.sendMessageOrEdit(ctx, chatID, err.Error(), nil)
+		}
+		if err := c.Store.UpdateGroupName(ctx, group.ID, parts[3]); err != nil {
+			return c.sendMessageOrEdit(ctx, chatID, "分组改名失败："+err.Error(), nil)
+		}
+		return c.sendGroupDetail(ctx, chatID, group.ID, "✅ 分组名称已更新。\n\n")
+	}
 	if len(parts) >= 3 && parts[1] == "add" {
 		if err := ValidateGroupName(parts[2]); err != nil {
 			return c.sendMessageOrEdit(ctx, chatID, err.Error(), nil)
@@ -309,7 +322,7 @@ func (c *TelegramController) handleDNSCommand(ctx context.Context, chatID int64,
 		if err != nil {
 			return err
 		}
-		ttl := 120
+		ttl := defaultDNSRecordTTL
 		proxied := false
 		recordID := ""
 		for _, item := range parts[4:] {
@@ -319,7 +332,9 @@ func (c *TelegramController) handleDNSCommand(ctx context.Context, chatID int64,
 			}
 			switch k {
 			case "ttl":
-				if n, err := strconv.Atoi(v); err == nil {
+				if strings.EqualFold(v, "auto") {
+					ttl = 1
+				} else if n, err := strconv.Atoi(v); err == nil {
 					ttl = n
 				}
 			case "proxied":
@@ -511,7 +526,11 @@ func (c *TelegramController) sendStatus(ctx context.Context, chatID int64) error
 		return err
 	}
 	msg := FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras())
-	return c.sendMessageOrEdit(ctx, chatID, strings.TrimSpace(msg), nil)
+	markup := (*telegram.ReplyMarkup)(nil)
+	if c.callbackChat == chatID && c.callbackMsg > 0 {
+		markup = statusMenu()
+	}
+	return c.sendMessageOrEdit(ctx, chatID, strings.TrimSpace(msg), markup)
 }
 
 func (c *TelegramController) sendSetup(ctx context.Context, chatID int64) error {
@@ -550,6 +569,15 @@ func mainMenu() *telegram.ReplyMarkup {
 	}}
 }
 
+func statusMenu() *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "刷新状态", CallbackData: "status_refresh"}},
+		{{Text: "DNS 配置", CallbackData: "dns"}},
+		{{Text: "节点管理", CallbackData: "nodes"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
+}
+
 func helpText() string {
 	return `/start /menu 打开菜单
 /status 查看状态
@@ -557,7 +585,8 @@ func helpText() string {
 /config_master_url 配置 Master 公网地址
 /cf <Token> <Zone Name> [Zone ID]
 /groups add <分组名>
-/dns set <分组名> <A记录> [ttl=120] [proxied=false] [record_id=xxx]
+/groups rename <原分组名> <新分组名>
+/dns set <分组名> <A记录> [ttl=60|1(auto)] [proxied=false] [record_id=xxx]
 /nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=10] [enabled=true] [auto_switch=true] [iface=auto]
 /agent install <节点名>
 /policy set threshold=80 quota=1000GB reset_day=1 mode=both offline=300 auto_switch=true notify_only=false repo=<install-agent-url>
@@ -567,12 +596,14 @@ func helpText() string {
 推荐优先使用按钮和向导，以上带参数命令适合作为高级用法。`
 }
 
-func groupsHelp() string { return "分组命令：/groups add <分组名>" }
+func groupsHelp() string {
+	return "分组命令：/groups add <分组名>；/groups rename <原分组名> <新分组名>"
+}
 func nodesHelp() string {
 	return "节点命令：/nodes add <节点名> <公网IP> <分组名> [quota=1000GB] [threshold=80] [reset_day=1] [mode=rx|tx|both] [priority=10] [enabled=true] [auto_switch=true] [iface=auto]"
 }
 func dnsHelp() string {
-	return "DNS 命令：/dns set <分组名> <A记录> [ttl=120] [proxied=false] [record_id=xxx]"
+	return "DNS 命令：/dns set <分组名> <A记录> [ttl=60|1(auto)] [proxied=false] [record_id=xxx]"
 }
 func cfHelp() string {
 	return "Cloudflare：发送 /cf <Token> <Zone Name> [Zone ID]。\n如果不提供 Zone ID，程序会自动查询。"
@@ -713,7 +744,7 @@ func (c *TelegramController) ensureSuggestedMasterPublicURL(ctx context.Context)
 }
 
 func masterURLHelp(suggested string) string {
-	base := "请发送 Master 公网地址，例如：\nhttp://1.2.3.4:8080\nhttps://domain.example.com"
+	base := "请发送 Master 公网地址，例如：\nhttp://203.0.113.10:8080\nhttps://example.com"
 	if strings.TrimSpace(suggested) == "" {
 		return base + "\n\n也可以直接发送服务器公网 IP，系统会自动补全为 http://公网IP:8080。\n发送 /cancel 取消。"
 	}
@@ -981,14 +1012,12 @@ func formatAgentInstallMessage(preview agentInstallPreview) string {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n请在节点 " + preview.Node.Name + " 上执行下面命令：\n\n")
-	b.WriteString(preview.Command + "\n\n")
+	b.WriteString("\n请点击“显示纯安装命令”后长按复制。\n")
+	b.WriteString("需要卸载时，可点击“显示纯卸载命令”。\n\n")
 	b.WriteString("join code 有效期：30 分钟")
 	if !preview.ExpiresAt.IsZero() {
 		b.WriteString("（到 " + preview.ExpiresAt.Local().Format("2006-01-02 15:04:05") + "）")
 	}
-	b.WriteString("\n\nAgent 卸载命令：\n")
-	b.WriteString(agentUninstallCommand())
 	return strings.TrimSpace(b.String())
 }
 

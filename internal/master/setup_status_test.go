@@ -32,7 +32,7 @@ func TestBuildSetupStatusMissingItems(t *testing.T) {
 func TestBuildSetupStatusMasksCloudflareToken(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
-	if err := store.SetMasterPublicURL(ctx, "https://master.example.com"); err != nil {
+	if err := store.SetMasterPublicURL(ctx, "https://example.com"); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.SaveCloudflareDefaults(ctx, "1234567890", "example.com", "zone-1"); err != nil {
@@ -60,7 +60,7 @@ func TestCreateAgentInstallCommandPrecheck(t *testing.T) {
 	node, err := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,

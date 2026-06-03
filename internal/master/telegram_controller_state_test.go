@@ -30,7 +30,7 @@ func TestConfigMasterURLInvalidThenValidKeepsPending(t *testing.T) {
 	controller, rec := newTestTelegramController(t)
 	ctx := context.Background()
 	controller.setSession(1, "master_url")
-	if err := controller.handleText(ctx, 1, "http:1.2.3.4:8080"); err != nil {
+	if err := controller.handleText(ctx, 1, "http:203.0.113.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	if controller.sessions[1] != "master_url" {
@@ -39,7 +39,7 @@ func TestConfigMasterURLInvalidThenValidKeepsPending(t *testing.T) {
 	if !rec.contains("请使用 http:// 或 https:// 开头") {
 		t.Fatalf("expected precise error, got %v", rec.messages)
 	}
-	if err := controller.handleText(ctx, 1, "http://1.2.3.4:8080"); err != nil {
+	if err := controller.handleText(ctx, 1, "http://203.0.113.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	if controller.sessions[1] != "" {
@@ -49,7 +49,7 @@ func TestConfigMasterURLInvalidThenValidKeepsPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value != "http://1.2.3.4:8080" {
+	if value != "http://203.0.113.10:8080" {
 		t.Fatalf("unexpected saved URL: %s", value)
 	}
 }
@@ -57,18 +57,18 @@ func TestConfigMasterURLInvalidThenValidKeepsPending(t *testing.T) {
 func TestConfigMasterURLCommandArgSaves(t *testing.T) {
 	controller, _ := newTestTelegramController(t)
 	ctx := context.Background()
-	if err := controller.handleText(ctx, 1, "/config_master_url http://1.2.3.4:8080"); err != nil {
+	if err := controller.handleText(ctx, 1, "/config_master_url http://203.0.113.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	value, _ := controller.Store.GetMasterPublicURL(ctx, "")
-	if value != "http://1.2.3.4:8080" {
+	if value != "http://203.0.113.10:8080" {
 		t.Fatalf("unexpected saved URL: %s", value)
 	}
 }
 
 func TestConfigMasterURLInvalidCommandArgKeepsPending(t *testing.T) {
 	controller, rec := newTestTelegramController(t)
-	if err := controller.handleText(context.Background(), 1, "/config_master_url http:1.2.3.4:8080"); err != nil {
+	if err := controller.handleText(context.Background(), 1, "/config_master_url http:203.0.113.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	if controller.sessions[1] != "master_url" {
@@ -83,11 +83,11 @@ func TestConfigMasterURLAutoCompletesHostPort(t *testing.T) {
 	controller, _ := newTestTelegramController(t)
 	ctx := context.Background()
 	controller.setSession(1, "master_url")
-	if err := controller.handleText(ctx, 1, "1.2.3.4:8080"); err != nil {
+	if err := controller.handleText(ctx, 1, "203.0.113.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	value, _ := controller.Store.GetMasterPublicURL(ctx, "")
-	if value != "http://1.2.3.4:8080" {
+	if value != "http://203.0.113.10:8080" {
 		t.Fatalf("unexpected saved URL: %s", value)
 	}
 }
@@ -96,11 +96,11 @@ func TestConfigMasterURLAutoCompletesIPWithDefaultPort(t *testing.T) {
 	controller, _ := newTestTelegramController(t)
 	ctx := context.Background()
 	controller.setSession(1, "master_url")
-	if err := controller.handleText(ctx, 1, "1.2.3.4"); err != nil {
+	if err := controller.handleText(ctx, 1, "203.0.113.10"); err != nil {
 		t.Fatal(err)
 	}
 	value, _ := controller.Store.GetMasterPublicURL(ctx, "")
-	if value != "http://1.2.3.4:8080" {
+	if value != "http://203.0.113.10:8080" {
 		t.Fatalf("unexpected saved URL: %s", value)
 	}
 }
@@ -125,7 +125,7 @@ func TestUseSuggestedMasterURLCallbackSaves(t *testing.T) {
 		t.Fatal(err)
 	}
 	value, _ := controller.Store.GetMasterPublicURL(ctx, "")
-	if value != "http://5.6.7.8:8080" {
+	if value != "http://198.51.100.10:8080" {
 		t.Fatalf("unexpected saved URL: %s", value)
 	}
 }
@@ -154,7 +154,7 @@ func newTestTelegramController(t *testing.T) (*TelegramController, *recordingTel
 	t.Helper()
 	store := testMasterStore(t)
 	ctx := context.Background()
-	if err := store.SetSetting(ctx, settingSuggestedPublicAPIURL, "http://5.6.7.8:8080"); err != nil {
+	if err := store.SetSetting(ctx, settingSuggestedPublicAPIURL, "http://198.51.100.10:8080"); err != nil {
 		t.Fatal(err)
 	}
 	rec := &recordingTelegramClient{}

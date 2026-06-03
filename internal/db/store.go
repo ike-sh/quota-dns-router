@@ -498,6 +498,15 @@ func (s *Store) GetGroupByID(ctx context.Context, id string) (Group, error) {
 	`, id))
 }
 
+func (s *Store) UpdateGroupName(ctx context.Context, groupID, name string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE groups
+		SET name = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, name, groupID)
+	return err
+}
+
 func (s *Store) ListGroups(ctx context.Context) ([]Group, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, switch_cooldown_seconds, current_node_id, last_switch_at, created_at, updated_at

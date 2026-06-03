@@ -45,7 +45,7 @@ func TestMasterVersionOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	want := "quota-dns-router master 0.1.0-alpha.8"
+	want := "quota-dns-router master 0.1.0-alpha.9"
 	if strings.TrimSpace(got) != want {
 		t.Fatalf("got %q want %q", strings.TrimSpace(got), want)
 	}
@@ -58,7 +58,7 @@ func TestCLIStatusAndConfigCheckIncludeSwitchAndRisk(t *testing.T) {
 	oldNode, _ := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-01",
-		PublicIP:              "1.1.1.1",
+		PublicIP:              "203.0.113.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -72,7 +72,7 @@ func TestCLIStatusAndConfigCheckIncludeSwitchAndRisk(t *testing.T) {
 	newNode, _ := store.CreateNode(ctx, db.Node{
 		GroupID:               group.ID,
 		Name:                  "hk-02",
-		PublicIP:              "2.2.2.2",
+		PublicIP:              "198.51.100.10",
 		MonthlyQuotaBytes:     1000,
 		ThresholdPercent:      80,
 		ResetDay:              1,
@@ -83,14 +83,14 @@ func TestCLIStatusAndConfigCheckIncludeSwitchAndRisk(t *testing.T) {
 		PreferredIface:        "auto",
 		ReportIntervalSeconds: 60,
 	})
-	_ = store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "1.1.1.1", "2.2.2.2", db.SwitchTriggerManual, "测试切换", "success", "")
+	_ = store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "203.0.113.10", "198.51.100.10", db.SwitchTriggerManual, "测试切换", "success", "")
 
 	overview, err := master.BuildStatusOverview(ctx, store, "http://127.0.0.1:8080", nil, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
 	statusOut := master.FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras())
-	for _, want := range []string{"最近切换", "hk-01 / 1.1.1.1 -> hk-02 / 2.2.2.2", "当前风险"} {
+	for _, want := range []string{"最近切换", "hk-01 / 203.0.113.10 -> hk-02 / 198.51.100.10", "当前风险"} {
 		if !strings.Contains(statusOut, want) {
 			t.Fatalf("expected CLI status output to contain %q: %s", want, statusOut)
 		}
