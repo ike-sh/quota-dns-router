@@ -20,6 +20,18 @@ type fakeDNS struct {
 	anyRecordErr error
 	createRecord cloudflare.DNSRecord
 	createErr    error
+	updateCalls  *[]dnsUpdateCall
+	updateErr    error
+}
+
+type dnsUpdateCall struct {
+	Token      string
+	ZoneID     string
+	RecordID   string
+	RecordName string
+	IP         string
+	TTL        int
+	Proxied    bool
 }
 
 func (f fakeDNS) ListZones(ctx context.Context, token string) ([]cloudflare.Zone, error) {
@@ -46,7 +58,18 @@ func (f fakeDNS) CreateDNSRecord(ctx context.Context, token, zoneID, recordName,
 }
 
 func (f fakeDNS) UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error {
-	return nil
+	if f.updateCalls != nil {
+		*f.updateCalls = append(*f.updateCalls, dnsUpdateCall{
+			Token:      token,
+			ZoneID:     zoneID,
+			RecordID:   recordID,
+			RecordName: recordName,
+			IP:         ip,
+			TTL:        ttl,
+			Proxied:    proxied,
+		})
+	}
+	return f.updateErr
 }
 
 func TestCloudflareSummaryOutput(t *testing.T) {

@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.1.0-alpha.6
+
+- 安装器默认切换到 `QDR_INSTALL_MODE=binary`，优先从 GitHub Releases 下载预编译 `qdr-master` / `qdr-agent`，安装后强制做版本校验。
+- 新增 `.github/workflows/release.yml`，在 tag 推送时构建 Linux amd64 / arm64 release 包，并发布 `SHA256SUMS`。
+- 安装脚本新增 `binary / source / auto` 三种模式、`QDR_ALLOW_SOURCE_FALLBACK` 控制、二进制安装最小依赖和更明确的安装模式输出。
+- 安装脚本按模式区分磁盘要求：二进制模式优先面向小磁盘 VPS，源码模式继续保留系统 Go / 包管理器 / 官方 tarball 的稳健 fallback。
+- Telegram 节点创建流程默认简化为“分组 -> 节点名 -> 公网 IP -> 确认创建”，默认策略统一集中到 `/policy`，并补充节点详情页、节点策略修改、节点启停、自动切换开关和安装排查入口。
+- DNS 向导在“记录存在但 IP 未匹配任何节点”时，新增一键改为指向已配置节点的修正分支。
+- 版本升级到 `0.1.0-alpha.6`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+
 ## 0.1.0-alpha.5
 
 - 调整 Telegram 推荐初始化顺序为 Master 公网地址 -> Cloudflare -> 分组 -> 节点 -> DNS -> Agent -> 状态，并把节点创建后的主推荐按钮改为 DNS 优先。

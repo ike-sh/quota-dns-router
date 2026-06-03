@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.5"
+VERSION="0.1.0-alpha.6"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -12,7 +12,15 @@ REPO="${QDR_REPO:-https://github.com/ike-sh/quota-dns-router}"
 BRANCH="${QDR_BRANCH:-main}"
 GO_VERSION="${QDR_GO_VERSION:-1.25.0}"
 MIN_GO_VERSION="${QDR_MIN_GO_VERSION:-1.25.0}"
-GO_TARBALL_MIN_SPACE_MB=800
+INSTALL_MODE="${QDR_INSTALL_MODE:-binary}"
+ALLOW_SOURCE_FALLBACK="${QDR_ALLOW_SOURCE_FALLBACK:-0}"
+
+BINARY_ROOT_MIN_SPACE_MB=50
+BINARY_TMP_MIN_SPACE_MB=50
+SOURCE_ROOT_MIN_SPACE_MB=800
+SOURCE_TMP_MIN_SPACE_MB=500
+SOURCE_USR_LOCAL_MIN_SPACE_MB=800
+
 JOIN_CODE=""
 MASTER_URL="${QDR_MASTER_API_URL:-}"
 YES=0
@@ -21,6 +29,7 @@ STAGE="初始化"
 WORK_DIR=""
 SRC_DIR=""
 BUILD_DIR=""
+GO_TMP_DIR=""
 
 usage() {
   cat <<'EOF'
@@ -30,8 +39,12 @@ usage() {
   --join / --code          Telegram 生成的加入码，必填
   --master                 Master 公网地址；未提供时读取 QDR_MASTER_API_URL
   --yes                    兼容参数，Agent 安装默认无交互
-  QDR_REPO                 GitHub 仓库，默认 https://github.com/ike-sh/quota-dns-router
-  QDR_BRANCH               Git 分支，默认 main
+
+环境变量：
+  QDR_INSTALL_MODE           安装模式：binary / source / auto，默认 binary
+  QDR_ALLOW_SOURCE_FALLBACK  auto + --yes 时允许失败后继续 source，设为 1 开启
+  QDR_REPO                   GitHub 仓库，默认 https://github.com/ike-sh/quota-dns-router
+  QDR_BRANCH                 Git 分支，默认 main
 EOF
 }
 
@@ -63,28 +76,34 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY_RUN=1 ;;
     --help|-h) usage; exit 0 ;;
     --version) version; exit 0 ;;
-    *) echo "未知参数：$1"; usage; exit 1 ;;
+    *)
+      echo "未知参数：$1"
+      usage
+      exit 1
+      ;;
   esac
   shift
 done
+
+cleanup() {
+  for dir in "$WORK_DIR" "$BUILD_DIR" "$GO_TMP_DIR"; do
+    if [ -n "$dir" ] && [ -d "$dir" ] && [ "$DRY_RUN" -ne 1 ]; then
+      rm -rf "$dir"
+    fi
+  done
+}
 
 on_error() {
   code=$?
   echo
   echo "安装失败：${STAGE}" >&2
   echo "失败命令：${BASH_COMMAND}" >&2
-  echo "建议：确认 Master 公网地址可访问，必要时先执行 df -h 检查磁盘空间；systemd 失败时请查看 journalctl -u quota-dns-router-agent -n 100 --no-pager。" >&2
+  echo "建议：确认 Master 公网地址可访问；先执行 df -h 检查 /、/tmp、/usr/local 空间；服务启动失败时查看 journalctl -u quota-dns-router-agent -n 100 --no-pager。" >&2
   exit "$code"
 }
 
-cleanup() {
-  if [ -n "${WORK_DIR}" ] && [ -d "${WORK_DIR}" ] && [ "$DRY_RUN" -ne 1 ]; then
-    rm -rf "${WORK_DIR}"
-  fi
-}
-
-trap on_error ERR
 trap cleanup EXIT
+trap on_error ERR
 
 step() {
   STAGE="$1"
@@ -101,11 +120,11 @@ run() {
 
 require_root() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    return
+    return 0
   fi
   if [ "$(id -u)" -ne 0 ]; then
-    echo "请使用 root 运行安装脚本，例如：sudo bash install-agent.sh --join <code> --master <url>"
-    exit 1
+    echo "请使用 root 运行安装脚本，例如：sudo bash install-agent.sh --join <code> --master <url>" >&2
+    return 1
   fi
 }
 
@@ -113,12 +132,26 @@ require_command() {
   command -v "$1" >/dev/null 2>&1
 }
 
-detect_go_arch() {
+normalize_install_mode() {
+  case "${INSTALL_MODE}" in
+    binary|source|auto) ;;
+    *)
+      echo "不支持的 QDR_INSTALL_MODE：${INSTALL_MODE}，可选值：binary / source / auto" >&2
+      return 1
+      ;;
+  esac
+}
+
+detect_linux_arch() {
+  local arch
   arch="$(uname -m)"
   case "$arch" in
     x86_64|amd64) echo "amd64" ;;
     aarch64|arm64) echo "arm64" ;;
-    *) echo "暂不支持架构：$arch" >&2; exit 1 ;;
+    *)
+      echo "暂不支持架构：$arch" >&2
+      return 1
+      ;;
   esac
 }
 
@@ -139,78 +172,172 @@ version_ge() {
 current_go_version() {
   if ! require_command go; then
     echo ""
-    return
+    return 0
   fi
   go version 2>/dev/null | awk '{print $3}' | sed 's/^go//'
 }
 
 go_is_ready() {
+  local current
   current="$(current_go_version)"
   [ -n "$current" ] && version_ge "$current" "$MIN_GO_VERSION"
-}
-
-check_disk_space() {
-  if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] df -Pm /usr/local /tmp"
-    return
-  fi
-  df -Pm /usr/local /tmp
 }
 
 available_space_mb() {
   df -Pm "$1" | awk 'NR==2 {print $4}'
 }
 
+print_disk_space_error() {
+  local component="$1"
+  local root_avail="$2"
+  local tmp_avail="$3"
+  local need_root="$4"
+  local need_tmp="$5"
+  local need_usr_local="${6:-0}"
+  local usr_local_avail="${7:-0}"
+  local mode_label="${8:-二进制安装}"
+
+  echo "错误：磁盘空间不足，无法安装 ${component}。"
+  echo
+  echo "当前空间："
+  printf "/      可用 %sMB\n" "$root_avail"
+  printf "/tmp   可用 %sMB\n" "$tmp_avail"
+  if [ "$need_usr_local" -gt 0 ]; then
+    printf "/usr/local 可用 %sMB\n" "$usr_local_avail"
+  fi
+  echo
+  echo "${mode_label}至少需要："
+  printf "/      %sMB\n" "$need_root"
+  printf "/tmp   %sMB\n" "$need_tmp"
+  if [ "$need_usr_local" -gt 0 ]; then
+    printf "/usr/local %sMB\n" "$need_usr_local"
+  fi
+  echo
+  echo "请先清理磁盘后重试："
+  echo "apt clean"
+  echo "journalctl --vacuum-size=100M"
+  echo "docker system prune -af"
+  echo "df -h"
+}
+
+ensure_binary_disk_space() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 检查 / 和 /tmp 可用空间是否分别 >= ${BINARY_ROOT_MIN_SPACE_MB}MB / ${BINARY_TMP_MIN_SPACE_MB}MB"
+    return 0
+  fi
+  local root_avail tmp_avail
+  root_avail="$(available_space_mb /)"
+  tmp_avail="$(available_space_mb /tmp)"
+  if [ -z "$root_avail" ] || [ -z "$tmp_avail" ]; then
+    echo "无法检查 / 或 /tmp 的可用空间。" >&2
+    return 1
+  fi
+  if [ "$root_avail" -lt "$BINARY_ROOT_MIN_SPACE_MB" ] || [ "$tmp_avail" -lt "$BINARY_TMP_MIN_SPACE_MB" ]; then
+    print_disk_space_error "Agent" "$root_avail" "$tmp_avail" "$BINARY_ROOT_MIN_SPACE_MB" "$BINARY_TMP_MIN_SPACE_MB"
+    return 1
+  fi
+}
+
+ensure_source_disk_space() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 检查 / 和 /tmp 可用空间是否分别 >= ${SOURCE_ROOT_MIN_SPACE_MB}MB / ${SOURCE_TMP_MIN_SPACE_MB}MB"
+    return 0
+  fi
+  local root_avail tmp_avail
+  root_avail="$(available_space_mb /)"
+  tmp_avail="$(available_space_mb /tmp)"
+  if [ -z "$root_avail" ] || [ -z "$tmp_avail" ]; then
+    echo "无法检查 / 或 /tmp 的可用空间。" >&2
+    return 1
+  fi
+  if [ "$root_avail" -lt "$SOURCE_ROOT_MIN_SPACE_MB" ] || [ "$tmp_avail" -lt "$SOURCE_TMP_MIN_SPACE_MB" ]; then
+    print_disk_space_error "Agent" "$root_avail" "$tmp_avail" "$SOURCE_ROOT_MIN_SPACE_MB" "$SOURCE_TMP_MIN_SPACE_MB" 0 0 "源码构建"
+    return 1
+  fi
+}
+
 ensure_space_for_go_fallback() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 检查 /usr/local 和 /tmp 可用空间是否 >= ${GO_TARBALL_MIN_SPACE_MB}MB"
-    return
+    echo "[dry-run] 检查 /usr/local 和 /tmp 可用空间是否分别 >= ${SOURCE_USR_LOCAL_MIN_SPACE_MB}MB / ${SOURCE_TMP_MIN_SPACE_MB}MB"
+    return 0
   fi
-  local usr_local_avail tmp_avail
-  usr_local_avail="$(available_space_mb /usr/local)"
+  local root_avail tmp_avail usr_local_avail
+  root_avail="$(available_space_mb /)"
   tmp_avail="$(available_space_mb /tmp)"
-  if [ -z "$usr_local_avail" ] || [ -z "$tmp_avail" ]; then
-    echo "无法检查 /usr/local 或 /tmp 的可用空间。"
-    exit 1
+  usr_local_avail="$(available_space_mb /usr/local)"
+  if [ -z "$root_avail" ] || [ -z "$tmp_avail" ] || [ -z "$usr_local_avail" ]; then
+    echo "无法检查 /、/tmp 或 /usr/local 的可用空间。" >&2
+    return 1
   fi
-  if [ "$usr_local_avail" -lt "$GO_TARBALL_MIN_SPACE_MB" ] || [ "$tmp_avail" -lt "$GO_TARBALL_MIN_SPACE_MB" ]; then
-    echo "可用磁盘空间不足，无法安全使用官方 Go tarball fallback。"
-    echo "请先执行 df -h，释放 /usr/local 和 /tmp 空间后重试。"
-    exit 1
-  fi
-}
-
-print_go_tar_failure() {
-  local log_file="$1"
-  echo "Go 工具链解压失败。"
-  echo "可能是磁盘空间不足、下载不完整、权限问题。"
-  echo "建议执行 df -h 后重新安装。"
-  if [ -f "$log_file" ]; then
-    tail -n 50 "$log_file" || true
+  if [ "$usr_local_avail" -lt "$SOURCE_USR_LOCAL_MIN_SPACE_MB" ] || [ "$tmp_avail" -lt "$SOURCE_TMP_MIN_SPACE_MB" ] || [ "$root_avail" -lt "$SOURCE_ROOT_MIN_SPACE_MB" ]; then
+    print_disk_space_error "Agent" "$root_avail" "$tmp_avail" "$SOURCE_ROOT_MIN_SPACE_MB" "$SOURCE_TMP_MIN_SPACE_MB" "$SOURCE_USR_LOCAL_MIN_SPACE_MB" "$usr_local_avail" "源码构建（Go tarball fallback）"
+    return 1
   fi
 }
 
-install_dependencies() {
+install_binary_dependencies() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 安装最小依赖 ca-certificates curl tar"
+    return 0
+  fi
+  if require_command apt-get; then
+    run apt-get update
+    run apt-get install -y ca-certificates curl tar
+    return 0
+  fi
+  if require_command dnf; then
+    run dnf install -y ca-certificates curl tar
+    return 0
+  fi
+  if require_command yum; then
+    run yum install -y ca-certificates curl tar
+    return 0
+  fi
+
+  local missing=()
+  require_command curl || missing+=("curl")
+  require_command tar || missing+=("tar")
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "系统没有可用包管理器，且缺少命令：${missing[*]}。" >&2
+    return 1
+  fi
+}
+
+install_source_dependencies() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 安装 ca-certificates curl tar git build-essential"
-    return
+    return 0
   fi
   if require_command apt-get; then
     run apt-get update
     run apt-get install -y ca-certificates curl tar git build-essential
-  elif require_command dnf; then
+    return 0
+  fi
+  if require_command dnf; then
     run dnf install -y ca-certificates curl tar git gcc gcc-c++ make
-  elif require_command yum; then
+    return 0
+  fi
+  if require_command yum; then
     run yum install -y ca-certificates curl tar git gcc gcc-c++ make
-  else
-    echo "未识别包管理器，请先安装 ca-certificates、curl、tar、git、构建工具和 Go。"
-    exit 1
+    return 0
+  fi
+
+  local missing=()
+  require_command curl || missing+=("curl")
+  require_command tar || missing+=("tar")
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "系统没有可用包管理器，且缺少命令：${missing[*]}。" >&2
+    return 1
   fi
 }
 
 try_install_distro_go() {
   if go_is_ready; then
-    return
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 尝试通过系统包管理器安装 Go"
+    return 0
   fi
   if require_command apt-get; then
     run apt-get install -y golang-go || true
@@ -221,13 +348,27 @@ try_install_distro_go() {
   fi
 }
 
-install_official_go() {
-  if go_is_ready; then
-    return
+print_go_tar_failure() {
+  local log_file="$1"
+  echo "Go 工具链解压失败。"
+  echo "可能是磁盘空间不足、下载不完整或权限问题。"
+  echo "建议先执行 df -h 再重试。"
+  if [ -f "$log_file" ]; then
+    tail -n 50 "$log_file" || true
   fi
+}
+
+install_official_go() {
+  local go_arch url tar_log
+
+  if go_is_ready; then
+    return 0
+  fi
+
   ensure_space_for_go_fallback
-  go_arch="$(detect_go_arch)"
+  go_arch="$(detect_linux_arch)"
   url="https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz"
+
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] GO_TMP=\"\$(mktemp -d)\""
     echo "[dry-run] curl -fL --retry 3 --connect-timeout 10 -o \"\$GO_TMP/go.tgz\" ${url}"
@@ -236,74 +377,177 @@ install_official_go() {
     echo "[dry-run] test -x \"\$GO_TMP/extract/go/bin/go\""
     echo "[dry-run] rm -rf /usr/local/go"
     echo "[dry-run] mv \"\$GO_TMP/extract/go\" /usr/local/go"
-    return
+    return 0
   fi
-  GO_TMP="$(mktemp -d)"
-  curl -fL --retry 3 --connect-timeout 10 -o "${GO_TMP}/go.tgz" "$url"
-  mkdir -p "${GO_TMP}/extract"
-  tar_log="${GO_TMP}/go-tar.log"
-  if ! tar -C "${GO_TMP}/extract" -xzf "${GO_TMP}/go.tgz" 2>"${tar_log}"; then
+
+  GO_TMP_DIR="$(mktemp -d)"
+  curl -fL --retry 3 --connect-timeout 10 -o "${GO_TMP_DIR}/go.tgz" "$url"
+  mkdir -p "${GO_TMP_DIR}/extract"
+  tar_log="${GO_TMP_DIR}/go-tar.log"
+  if ! tar -C "${GO_TMP_DIR}/extract" -xzf "${GO_TMP_DIR}/go.tgz" 2>"${tar_log}"; then
     print_go_tar_failure "${tar_log}"
-    exit 1
+    return 1
   fi
-  if [ ! -x "${GO_TMP}/extract/go/bin/go" ]; then
-    echo "Go 工具链解压后未找到 go/bin/go。"
+  if [ ! -x "${GO_TMP_DIR}/extract/go/bin/go" ]; then
+    echo "Go 工具链解压后未找到 go/bin/go。" >&2
     print_go_tar_failure "${tar_log}"
-    exit 1
+    return 1
   fi
   rm -rf /usr/local/go
-  mv "${GO_TMP}/extract/go" /usr/local/go
+  mv "${GO_TMP_DIR}/extract/go" /usr/local/go
   export PATH="/usr/local/go/bin:${PATH}"
   if ! go version >/dev/null 2>&1 || ! go_is_ready; then
-    echo "Go 工具链安装后仍不可用，请检查 /usr/local/go/bin/go。"
-    exit 1
+    echo "Go 工具链安装后仍不可用，请检查 /usr/local/go/bin/go。" >&2
+    return 1
   fi
 }
 
 prepare_source() {
+  local repo_no_git
+
   if [ -f "./go.mod" ] && [ -d "./cmd/qdr-agent" ]; then
     SRC_DIR="$(pwd)"
     echo "使用当前源码目录：${SRC_DIR}"
-    return
+    return 0
   fi
+
   if [ "$DRY_RUN" -eq 1 ]; then
     SRC_DIR="/tmp/quota-dns-router-src"
     echo "[dry-run] 下载 ${REPO} (${BRANCH}) 到临时目录"
-    return
+    return 0
   fi
+
   WORK_DIR="$(mktemp -d)"
-  SRC_DIR="${WORK_DIR}/src"
   if require_command git; then
-    git clone --depth 1 --branch "$BRANCH" "$REPO" "$SRC_DIR"
-  else
-    mkdir -p "$SRC_DIR"
-    repo_no_git="${REPO%.git}"
-    curl -fsSL "${repo_no_git}/archive/refs/heads/${BRANCH}.tar.gz" | tar -xz -C "$SRC_DIR" --strip-components=1
+    git clone --depth 1 --branch "$BRANCH" "$REPO" "${WORK_DIR}/src"
+    SRC_DIR="${WORK_DIR}/src"
+    return 0
+  fi
+
+  repo_no_git="${REPO%.git}"
+  mkdir -p "${WORK_DIR}/src"
+  curl -fsSL "${repo_no_git}/archive/refs/heads/${BRANCH}.tar.gz" | tar -xz -C "${WORK_DIR}/src" --strip-components=1
+  SRC_DIR="${WORK_DIR}/src"
+}
+
+verify_binary_version() {
+  local binary_path="$1"
+  local expected="$2"
+  local actual
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] ${binary_path} version"
+    return 0
+  fi
+
+  actual="$("${binary_path}" version | tr -d '\r')"
+  if [ "$actual" != "$expected" ]; then
+    echo "${BIN_NAME} version 校验失败：期望 ${expected}，实际 ${actual}" >&2
+    return 1
   fi
 }
 
-build_agent() {
+build_agent_from_source() {
+  local expected
+
+  expected="quota-dns-router agent ${VERSION}"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] cd ${SRC_DIR} && go build -o qdr-agent ./cmd/qdr-agent"
-    echo "[dry-run] ${BUILD_DIR:-/tmp/qdr-agent-build}/${BIN_NAME} version"
+    echo "[dry-run] cd ${SRC_DIR} && CGO_ENABLED=0 go build -trimpath -ldflags=\"-s -w\" -o qdr-agent ./cmd/qdr-agent"
     echo "[dry-run] install -m 0755 qdr-agent ${PREFIX}/${BIN_NAME}"
-    return
+    echo "[dry-run] ${PREFIX}/${BIN_NAME} version"
+    return 0
   fi
+
   BUILD_DIR="$(mktemp -d)"
-  (cd "$SRC_DIR" && go build -o "${BUILD_DIR}/${BIN_NAME}" ./cmd/qdr-agent)
-  built_version="$("${BUILD_DIR}/${BIN_NAME}" version | tr -d '\r')"
-  expected_version="quota-dns-router agent ${VERSION}"
-  if [ "$built_version" != "$expected_version" ]; then
-    echo "qdr-agent version 校验失败：期望 ${expected_version}，实际 ${built_version}"
-    exit 1
-  fi
+  (
+    cd "$SRC_DIR"
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "${BUILD_DIR}/${BIN_NAME}" ./cmd/qdr-agent
+  )
   install -m 0755 "${BUILD_DIR}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
+  verify_binary_version "${PREFIX}/${BIN_NAME}" "$expected"
+}
+
+verify_sha256() {
+  local package_path="$1"
+  local sums_path="$2"
+  local package_name="$3"
+  local expected actual
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 校验 ${package_name} 的 SHA256"
+    return 0
+  fi
+
+  expected="$(grep "  ${package_name}\$" "$sums_path" | awk '{print $1}' | head -n 1 || true)"
+  if [ -z "$expected" ]; then
+    echo "SHA256SUMS 中未找到 ${package_name}。" >&2
+    return 1
+  fi
+
+  if require_command sha256sum; then
+    (
+      cd "$(dirname "$package_path")"
+      grep "  ${package_name}\$" "$sums_path" | sha256sum -c -
+    )
+    return 0
+  fi
+  if require_command shasum; then
+    actual="$(shasum -a 256 "$package_path" | awk '{print $1}')"
+  elif require_command openssl; then
+    actual="$(openssl dgst -sha256 "$package_path" | awk '{print $NF}')"
+  else
+    echo "警告：未找到 sha256sum/shasum/openssl，跳过 SHA256 校验。"
+    return 0
+  fi
+
+  if [ "$actual" != "$expected" ]; then
+    echo "SHA256 校验失败：${package_name}" >&2
+    return 1
+  fi
+}
+
+install_agent_from_release() {
+  local arch repo_no_git release_base package_name package_url sums_url expected
+
+  arch="$(detect_linux_arch)"
+  repo_no_git="${REPO%.git}"
+  release_base="${repo_no_git}/releases/download/v${VERSION}"
+  package_name="${BIN_NAME}_linux_${arch}.tar.gz"
+  package_url="${release_base}/${package_name}"
+  sums_url="${release_base}/SHA256SUMS"
+  expected="quota-dns-router agent ${VERSION}"
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] TMP=\"\$(mktemp -d)\""
+    echo "[dry-run] curl -fL --retry 3 --connect-timeout 10 -o \"\$TMP/${package_name}\" ${package_url}"
+    echo "[dry-run] curl -fL --retry 3 --connect-timeout 10 -o \"\$TMP/SHA256SUMS\" ${sums_url}"
+    echo "[dry-run] 校验 ${package_name} 的 SHA256"
+    echo "[dry-run] mkdir -p \"\$TMP/extract\""
+    echo "[dry-run] tar -C \"\$TMP/extract\" -xzf \"\$TMP/${package_name}\""
+    echo "[dry-run] test -x \"\$TMP/extract/${BIN_NAME}\""
+    echo "[dry-run] install -m 0755 \"\$TMP/extract/${BIN_NAME}\" ${PREFIX}/${BIN_NAME}"
+    echo "[dry-run] ${PREFIX}/${BIN_NAME} version"
+    return 0
+  fi
+
+  WORK_DIR="$(mktemp -d)"
+  curl -fL --retry 3 --connect-timeout 10 -o "${WORK_DIR}/${package_name}" "${package_url}"
+  curl -fL --retry 3 --connect-timeout 10 -o "${WORK_DIR}/SHA256SUMS" "${sums_url}"
+  verify_sha256 "${WORK_DIR}/${package_name}" "${WORK_DIR}/SHA256SUMS" "${package_name}"
+  mkdir -p "${WORK_DIR}/extract"
+  tar -C "${WORK_DIR}/extract" -xzf "${WORK_DIR}/${package_name}"
+  if [ ! -x "${WORK_DIR}/extract/${BIN_NAME}" ]; then
+    echo "解压后的 release 包中未找到可执行文件 ${BIN_NAME}。" >&2
+    return 1
+  fi
+  install -m 0755 "${WORK_DIR}/extract/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
+  verify_binary_version "${PREFIX}/${BIN_NAME}" "${expected}"
 }
 
 ensure_user() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 确保系统用户 quota-dns-router 存在"
-    return
+    return 0
   fi
   if ! id quota-dns-router >/dev/null 2>&1; then
     useradd --system --home "$DATA_DIR" --shell /usr/sbin/nologin quota-dns-router
@@ -313,7 +557,7 @@ ensure_user() {
 prepare_existing_service() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] systemctl stop quota-dns-router-agent.service 2>/dev/null || true"
-    return
+    return 0
   fi
   systemctl stop quota-dns-router-agent.service 2>/dev/null || true
 }
@@ -322,8 +566,9 @@ prepare_dirs() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] install -d -m 750 -o root -g quota-dns-router ${ETC_DIR}"
     echo "[dry-run] install -d -m 750 -o quota-dns-router -g quota-dns-router ${DATA_DIR} ${LOG_DIR}"
-    return
+    return 0
   fi
+
   install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"
   install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"
   chown -R quota-dns-router:quota-dns-router "$DATA_DIR" "$LOG_DIR"
@@ -337,8 +582,9 @@ prepare_dirs() {
 join_master() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL} --env ${ETC_DIR}/agent.env"
-    return
+    return 0
   fi
+
   "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" --env "${ETC_DIR}/agent.env"
   chown root:quota-dns-router "${ETC_DIR}/agent.env"
   chmod 0640 "${ETC_DIR}/agent.env"
@@ -347,8 +593,9 @@ join_master() {
 write_service() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 写入 ${UNIT}"
-    return
+    return 0
   fi
+
   cat > "$UNIT" <<'EOF'
 [Unit]
 Description=Quota DNS Router Agent
@@ -388,7 +635,7 @@ check_service() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] systemctl is-active --quiet quota-dns-router-agent.service"
     echo "[dry-run] 如失败，打印 systemctl status 和 journalctl 排查命令"
-    return
+    return 0
   fi
   if ! systemctl is-active --quiet quota-dns-router-agent.service; then
     echo "Agent 服务未成功启动，请查看："
@@ -396,51 +643,163 @@ check_service() {
     echo "journalctl -u quota-dns-router-agent -n 100 --no-pager"
     systemctl status quota-dns-router-agent --no-pager -l || true
     journalctl -u quota-dns-router-agent -n 100 --no-pager || true
-    exit 1
+    return 1
   fi
 }
 
-if [ -z "$JOIN_CODE" ]; then
-  echo "缺少 --join <code>。请先在 Telegram 执行 /agent install <节点名> 生成安装命令。"
-  exit 1
-fi
+validate_required_inputs() {
+  if [ -z "$JOIN_CODE" ]; then
+    echo "缺少 --join <code>。请先在 Telegram 执行 /agent install <节点名> 生成安装命令。" >&2
+    return 1
+  fi
+  if [ -z "$MASTER_URL" ]; then
+    echo "缺少 Master 地址。请使用 --master <url>，或直接使用 Telegram 生成的完整命令。" >&2
+    return 1
+  fi
+}
 
-if [ -z "$MASTER_URL" ]; then
-  echo "缺少 Master 地址。请使用 --master <url>，或直接使用 Telegram 生成的完整命令。"
-  exit 1
-fi
+print_binary_banner() {
+  local arch
+  arch="$(detect_linux_arch)"
+  version
+  echo "安装模式：binary"
+  echo "来源：GitHub Releases"
+  echo "架构：linux/${arch}"
+}
 
-step "[1/8] 检查系统环境"
-require_root
-detect_go_arch >/dev/null
-check_disk_space
+print_source_banner() {
+  version
+  echo "安装模式：source"
+  echo "来源：GitHub source ${BRANCH}"
+}
 
-step "[2/8] 安装依赖"
-install_dependencies
+print_auto_banner() {
+  local arch
+  arch="$(detect_linux_arch)"
+  version
+  echo "安装模式：auto"
+  echo "先尝试：GitHub Releases"
+  echo "架构：linux/${arch}"
+}
 
-step "[3/8] 准备 Go 工具链"
-try_install_distro_go
-install_official_go
+install_agent_binary_mode() {
+  print_binary_banner
+  step "[1/7] 检查系统环境"
+  require_root
+  detect_linux_arch >/dev/null
+  ensure_binary_disk_space
 
-step "[4/8] 下载 quota-dns-router 源码"
-prepare_source
+  step "[2/7] 安装最小依赖"
+  install_binary_dependencies
 
-step "[5/8] 构建 qdr-agent"
-build_agent
+  step "[3/7] 下载 release 二进制"
+  install_agent_from_release
 
-step "[6/8] 加入 Master 并写入配置"
-ensure_user
-prepare_existing_service
-prepare_dirs
-join_master
+  step "[4/7] 加入 Master 并写入配置"
+  ensure_user
+  prepare_existing_service
+  prepare_dirs
+  join_master
 
-step "[7/8] 写入 systemd 并启动 Agent"
-write_service
-start_service
+  step "[5/7] 写入 systemd"
+  write_service
 
-step "[8/8] 安装完成"
-check_service
-echo "Agent 已安装并启动。"
-echo "可执行：qdr-agent status"
-echo "也可查看：systemctl status quota-dns-router-agent --no-pager -l"
-echo "查看日志：journalctl -u quota-dns-router-agent -n 100 --no-pager"
+  step "[6/7] 启动 Agent 服务"
+  start_service
+
+  step "[7/7] 安装完成"
+  check_service
+}
+
+install_agent_source_mode() {
+  print_source_banner
+  step "[1/8] 检查系统环境"
+  require_root
+  detect_linux_arch >/dev/null
+  ensure_source_disk_space
+
+  step "[2/8] 安装源码构建依赖"
+  install_source_dependencies
+
+  step "[3/8] 准备 Go 工具链"
+  try_install_distro_go
+  install_official_go
+
+  step "[4/8] 下载 quota-dns-router 源码"
+  prepare_source
+
+  step "[5/8] 构建 qdr-agent"
+  build_agent_from_source
+
+  step "[6/8] 加入 Master 并写入配置"
+  ensure_user
+  prepare_existing_service
+  prepare_dirs
+  join_master
+
+  step "[7/8] 写入 systemd"
+  write_service
+
+  step "[8/8] 启动并检查 Agent 服务"
+  start_service
+  check_service
+}
+
+prompt_source_fallback() {
+  if [ "$ALLOW_SOURCE_FALLBACK" = "1" ]; then
+    echo "已启用 QDR_ALLOW_SOURCE_FALLBACK=1，继续尝试源码构建。"
+    return 0
+  fi
+  if [ "$YES" -eq 1 ]; then
+    echo "二进制安装失败。当前是非交互 --yes 模式，默认不会自动切换到源码构建。" >&2
+    echo "如需允许 fallback，请设置 QDR_ALLOW_SOURCE_FALLBACK=1 后重试。" >&2
+    return 1
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    return 1
+  fi
+
+  printf "二进制安装失败，是否改用 source 模式继续安装？[y/N]: "
+  read -r answer
+  case "${answer}" in
+    y|Y|yes|YES) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+finish_message() {
+  echo "Agent 已安装并启动。"
+  echo "可执行：qdr-agent status"
+  echo "也可查看：systemctl status quota-dns-router-agent --no-pager -l"
+  echo "查看日志：journalctl -u quota-dns-router-agent -n 100 --no-pager"
+}
+
+main() {
+  normalize_install_mode
+  validate_required_inputs
+
+  case "$INSTALL_MODE" in
+    binary)
+      install_agent_binary_mode
+      ;;
+    source)
+      install_agent_source_mode
+      ;;
+    auto)
+      print_auto_banner
+      if install_agent_binary_mode; then
+        :
+      else
+        echo "⚠️ 二进制安装失败。"
+        if ! prompt_source_fallback; then
+          return 1
+        fi
+        install_agent_source_mode
+      fi
+      ;;
+  esac
+
+  finish_message
+}
+
+main "$@"

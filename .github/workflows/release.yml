@@ -1,0 +1,75 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build release archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for bin in qdr-master qdr-agent; do
+            out_dir="$(mktemp -d)"
+            if [ "${bin}" = "qdr-master" ]; then
+              pkg="./cmd/qdr-master"
+            else
+              pkg="./cmd/qdr-agent"
+            fi
+            CGO_ENABLED=0 GOOS=linux GOARCH="${{ matrix.arch }}" \
+              go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
+            cat > "${out_dir}/README.txt" <<EOF
+            ${bin} ${GITHUB_REF_NAME}
+
+            Extract the archive and install the binary to /usr/local/bin.
+            EOF
+            tar -C "${out_dir}" -czf "dist/${bin}_linux_${{ matrix.arch }}.tar.gz" "${bin}" README.txt
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: dist/*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/SHA256SUMS

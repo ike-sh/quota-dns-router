@@ -183,11 +183,6 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
 		func() error { return controller.handleText(ctx, 1, "hk-01") },
 		func() error { return controller.handleText(ctx, 1, "1.1.1.1") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_quota_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_threshold_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_mode:both") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_reset_day_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_priority_default") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
 	} {
 		if err := action(); err != nil {
@@ -203,6 +198,11 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 	}
 	if node.ThresholdPercent != 80 || node.ResetDay != 1 || node.TrafficMode != db.TrafficModeBoth {
 		t.Fatalf("unexpected node defaults: %+v", node)
+	}
+	for _, want := range []string{"将使用默认流量策略", "修改流量策略"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected default policy confirmation %q, got %v", want, rec.payloads)
+		}
 	}
 	for _, want := range []string{"配置 DNS", "继续生成 Agent 命令"} {
 		if !rec.contains(want) {
@@ -229,11 +229,6 @@ func TestNodesWizardCreatesNodeWithDNSPrefersAgent(t *testing.T) {
 		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
 		func() error { return controller.handleText(ctx, 1, "hk-01") },
 		func() error { return controller.handleText(ctx, 1, "1.1.1.1") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_quota_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_threshold_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_mode:both") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_reset_day_default") },
-		func() error { return controller.handleCallback(ctx, 1, "nodes_priority_default") },
 		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
 	} {
 		if err := action(); err != nil {
@@ -245,6 +240,42 @@ func TestNodesWizardCreatesNodeWithDNSPrefersAgent(t *testing.T) {
 	}
 	if rec.contains("继续生成 Agent 命令") {
 		t.Fatalf("did not expect DNS-first agent fallback buttons when DNS already exists: %v", rec.payloads)
+	}
+}
+
+func TestNodesWizardCustomizesPolicyBeforeCreate(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []func() error{
+		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
+		func() error { return controller.handleText(ctx, 1, "hk-02") },
+		func() error { return controller.handleText(ctx, 1, "2.2.2.2") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_customize_policy") },
+		func() error { return controller.handleText(ctx, 1, "2000GB") },
+		func() error { return controller.handleText(ctx, 1, "85") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_mode:rx") },
+		func() error { return controller.handleText(ctx, 1, "2") },
+		func() error { return controller.handleText(ctx, 1, "15") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
+	} {
+		if err := action(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node, err := controller.Store.GetNodeByName(ctx, "hk-02")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.MonthlyQuotaBytes != 2000*1024*1024*1024 || node.ThresholdPercent != 85 || node.ResetDay != 2 || node.Priority != 15 || node.TrafficMode != db.TrafficModeRX {
+		t.Fatalf("unexpected custom node policy: %+v", node)
+	}
+	if !rec.contains("请确认节点配置") {
+		t.Fatalf("expected confirmation message, got %v", rec.messages)
 	}
 }
 
@@ -357,6 +388,122 @@ func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
 	for _, want := range []string{"✅ DNS A 记录已创建", "匹配节点：hk-01", "Agent 安装", "agent_node:" + node.ID} {
 		if !rec.contains(want) {
 			t.Fatalf("expected created DNS payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
+	updates := []dnsUpdateCall{}
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		record: cloudflare.DNSRecord{
+			ID:      "rec-1",
+			Type:    "A",
+			Name:    "hk.example.com",
+			Content: "9.9.9.9",
+			TTL:     120,
+		},
+		updateCalls: &updates,
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "hk"); err != nil {
+		t.Fatal(err)
+	}
+	if controller.sessions[1] != pendingDNSFixSelect {
+		t.Fatalf("expected pending dns fix flow, got %q", controller.sessions[1])
+	}
+	for _, want := range []string{"没有匹配任何已配置节点", "改为指向节点 hk-01 / 1.1.1.1"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected mismatch guidance %q, got %v", want, rec.payloads)
+		}
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_repoint:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("expected one DNS update call, got %+v", updates)
+	}
+	if updates[0].IP != "1.1.1.1" || updates[0].RecordID != "rec-1" {
+		t.Fatalf("unexpected DNS update call: %+v", updates[0])
+	}
+	for _, want := range []string{"✅ DNS A 记录已更新", "旧 IP：9.9.9.9", "新 IP：1.1.1.1", "Agent 安装"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected DNS repoint payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestPolicyPanelShowsDefaultStrategyCenter(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	if err := controller.handleCallback(context.Background(), 1, "policy"); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"⚙️ 默认流量策略", "默认重置日：1", "默认优先级：10", "这些默认值会用于新建节点", "修改默认重置日"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected policy panel to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestNodeDetailShowsPolicyActionsAndTroubleshooting(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_view:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"🖥 节点详情", "修改节点策略", "查看安装排查", "DNS 匹配：否"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected node detail payload to contain %q, got %v", want, rec.payloads)
 		}
 	}
 }

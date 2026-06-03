@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.5")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.6")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,46 +30,131 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.5")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.6")
 }
 
-func TestInstallMasterScriptSetsSecureEnvPermissions(t *testing.T) {
-	body := readScript(t, "install-master.sh")
-	assertContains(t, body, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
-	assertContains(t, body, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
-	assertContains(t, body, `chown root:quota-dns-router "${ETC_DIR}/master.env"`)
-	assertContains(t, body, `chmod 0640 "${ETC_DIR}/master.env"`)
-	assertContains(t, body, `chown quota-dns-router:quota-dns-router "${DATA_DIR}/master.db"`)
-	assertContains(t, body, `chmod 600 "${DATA_DIR}/master.db"`)
-}
-
-func TestInstallMasterDryRunWritesSuggestedPublicURL(t *testing.T) {
+func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
 	out := runBash(t, "QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
-	assertContains(t, out, "检测公网 IPv4")
-	assertContains(t, out, "http://203.0.113.10:8080")
-	assertContains(t, out, "QDR_SUGGESTED_PUBLIC_API_URL")
+	for _, want := range []string{
+		"安装模式：binary",
+		"来源：GitHub Releases",
+		"qdr-master_linux_amd64.tar.gz",
+		"SHA256SUMS",
+		"/usr/local/bin/qdr-master version",
+		"QDR_SUGGESTED_PUBLIC_API_URL=http://203.0.113.10:8080",
+	} {
+		assertContains(t, out, want)
+	}
+	for _, unwanted := range []string{"go build", "git clone", "golang-go", "build-essential"} {
+		assertNotContains(t, out, unwanted)
+	}
 }
 
-func TestInstallAgentScriptSetsSecureEnvPermissions(t *testing.T) {
-	body := readScript(t, "install-agent.sh")
-	assertContains(t, body, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
-	assertContains(t, body, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
-	assertContains(t, body, `chown root:quota-dns-router "${ETC_DIR}/agent.env"`)
-	assertContains(t, body, `chmod 0640 "${ETC_DIR}/agent.env"`)
-	assertContains(t, body, `User=quota-dns-router`)
-	assertContains(t, body, `Group=quota-dns-router`)
+func TestInstallAgentDryRunDefaultsToBinaryRelease(t *testing.T) {
+	out := runBash(t, "bash install-agent.sh --join abc --master http://1.2.3.4:8080 --dry-run")
+	for _, want := range []string{
+		"安装模式：binary",
+		"来源：GitHub Releases",
+		"qdr-agent_linux_amd64.tar.gz",
+		"SHA256SUMS",
+		"/usr/local/bin/qdr-agent version",
+		"/usr/local/bin/qdr-agent join --code <已隐藏> --master http://1.2.3.4:8080 --env /etc/quota-dns-router/agent.env",
+	} {
+		assertContains(t, out, want)
+	}
+	for _, unwanted := range []string{"go build", "git clone", "golang-go", "build-essential"} {
+		assertNotContains(t, out, unwanted)
+	}
+}
+
+func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
+	masterOut := runBash(t, "QDR_INSTALL_MODE=source QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
+	for _, want := range []string{
+		"安装模式：source",
+		"来源：GitHub source main",
+		"安装源码构建依赖",
+		"CGO_ENABLED=0 go build",
+		"尝试通过系统包管理器安装 Go",
+	} {
+		assertContains(t, masterOut, want)
+	}
+	agentOut := runBash(t, "QDR_INSTALL_MODE=source bash install-agent.sh --join abc --master http://1.2.3.4:8080 --dry-run")
+	for _, want := range []string{
+		"安装模式：source",
+		"来源：GitHub source main",
+		"安装源码构建依赖",
+		"CGO_ENABLED=0 go build",
+		"尝试通过系统包管理器安装 Go",
+	} {
+		assertContains(t, agentOut, want)
+	}
+}
+
+func TestInstallScriptsSetSecurePermissions(t *testing.T) {
+	master := readScript(t, "install-master.sh")
+	assertContains(t, master, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
+	assertContains(t, master, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
+	assertContains(t, master, `chown root:quota-dns-router "${ETC_DIR}/master.env"`)
+	assertContains(t, master, `chmod 0640 "${ETC_DIR}/master.env"`)
+	assertContains(t, master, `chown quota-dns-router:quota-dns-router "${DATA_DIR}/master.db"`)
+	assertContains(t, master, `chmod 600 "${DATA_DIR}/master.db"`)
+
+	agent := readScript(t, "install-agent.sh")
+	assertContains(t, agent, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
+	assertContains(t, agent, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
+	assertContains(t, agent, `chown root:quota-dns-router "${ETC_DIR}/agent.env"`)
+	assertContains(t, agent, `chmod 0640 "${ETC_DIR}/agent.env"`)
+	assertContains(t, agent, `User=quota-dns-router`)
+	assertContains(t, agent, `Group=quota-dns-router`)
 }
 
 func TestInstallScriptsCheckDiskSpaceAndSafeGoFallback(t *testing.T) {
 	master := readScript(t, "install-master.sh")
+	for _, want := range []string{
+		`BINARY_ROOT_MIN_SPACE_MB=80`,
+		`BINARY_TMP_MIN_SPACE_MB=80`,
+		`SOURCE_ROOT_MIN_SPACE_MB=800`,
+		`SOURCE_TMP_MIN_SPACE_MB=500`,
+		`SOURCE_USR_LOCAL_MIN_SPACE_MB=800`,
+		`GO_TMP_DIR="$(mktemp -d)"`,
+		`mkdir -p "${GO_TMP_DIR}/extract"`,
+		`tar -C "${GO_TMP_DIR}/extract" -xzf "${GO_TMP_DIR}/go.tgz"`,
+		`mv "${GO_TMP_DIR}/extract/go" /usr/local/go`,
+		`tail -n 50`,
+	} {
+		assertContains(t, master, want)
+	}
+
 	agent := readScript(t, "install-agent.sh")
-	for _, body := range []string{master, agent} {
-		assertContains(t, body, `df -Pm /usr/local /tmp`)
-		assertContains(t, body, `GO_TMP="$(mktemp -d)"`)
-		assertContains(t, body, `mkdir -p "${GO_TMP}/extract"`)
-		assertContains(t, body, `tar -C "${GO_TMP}/extract" -xzf "${GO_TMP}/go.tgz"`)
-		assertContains(t, body, `mv "${GO_TMP}/extract/go" /usr/local/go`)
-		assertContains(t, body, `tail -n 50`)
+	for _, want := range []string{
+		`BINARY_ROOT_MIN_SPACE_MB=50`,
+		`BINARY_TMP_MIN_SPACE_MB=50`,
+		`SOURCE_ROOT_MIN_SPACE_MB=800`,
+		`SOURCE_TMP_MIN_SPACE_MB=500`,
+		`SOURCE_USR_LOCAL_MIN_SPACE_MB=800`,
+		`GO_TMP_DIR="$(mktemp -d)"`,
+		`mkdir -p "${GO_TMP_DIR}/extract"`,
+		`tar -C "${GO_TMP_DIR}/extract" -xzf "${GO_TMP_DIR}/go.tgz"`,
+		`mv "${GO_TMP_DIR}/extract/go" /usr/local/go`,
+		`tail -n 50`,
+	} {
+		assertContains(t, agent, want)
+	}
+}
+
+func TestInstallScriptsExposeModeAndFallbackControls(t *testing.T) {
+	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
+		body := readScript(t, name)
+		for _, want := range []string{
+			`QDR_INSTALL_MODE`,
+			`QDR_ALLOW_SOURCE_FALLBACK`,
+			`安装模式：binary`,
+			`来源：GitHub Releases`,
+			`安装模式：source`,
+			`来源：GitHub source ${BRANCH}`,
+		} {
+			assertContains(t, body, want)
+		}
 	}
 }
 
@@ -79,8 +164,8 @@ func TestInstallAgentScriptSupportsMasterAndVersionCheck(t *testing.T) {
 		`[--master <url>] [--yes] [--dry-run] [--help] [--version]`,
 		`--yes                    兼容参数，Agent 安装默认无交互`,
 		`缺少 Master 地址。请使用 --master <url>，或直接使用 Telegram 生成的完整命令。`,
-		`"${BUILD_DIR}/${BIN_NAME}" version`,
-		`expected_version="quota-dns-router agent ${VERSION}"`,
+		`${PREFIX}/${BIN_NAME} version`,
+		`expected="quota-dns-router agent ${VERSION}"`,
 	} {
 		assertContains(t, body, want)
 	}

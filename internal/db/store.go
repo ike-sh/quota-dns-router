@@ -690,6 +690,38 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeWithGroup, error) {
 	return out, rows.Err()
 }
 
+func (s *Store) UpdateNodePolicy(ctx context.Context, n Node) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET monthly_quota_bytes = ?,
+		    threshold_percent = ?,
+		    reset_day = ?,
+		    traffic_mode = ?,
+		    priority = ?,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, n.MonthlyQuotaBytes, n.ThresholdPercent, n.ResetDay, n.TrafficMode, n.Priority, n.ID)
+	return err
+}
+
+func (s *Store) SetNodeEnabled(ctx context.Context, nodeID string, enabled bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, boolInt(enabled), nodeID)
+	return err
+}
+
+func (s *Store) SetNodeAutoSwitch(ctx context.Context, nodeID string, autoSwitch bool) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET auto_switch = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, boolInt(autoSwitch), nodeID)
+	return err
+}
+
 func (s *Store) BindAgentToNode(ctx context.Context, nodeID, agentID string) error {
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE nodes
