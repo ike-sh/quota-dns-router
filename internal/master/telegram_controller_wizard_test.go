@@ -93,6 +93,36 @@ func TestCloudflareTokenCallbackEntersPending(t *testing.T) {
 	}
 }
 
+func TestCloudflareTokenPromptCleansUpAfterSuccess(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		zones:  []cloudflare.Zone{{ID: "zone-1", Name: "example.com"}},
+		zoneID: "zone-1",
+	})
+	ctx := context.Background()
+	if err := controller.handleUpdate(ctx, telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-cf-token",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "cf_token",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "cf_secret_token_123456"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.containsDeletedMessageID(88) {
+		t.Fatalf("expected Cloudflare token prompt to be cleaned up, deleted=%v paths=%v", rec.deletedMessageIDs, rec.paths)
+	}
+	if controller.sessions[1] != pendingCloudflareZoneSelect {
+		t.Fatalf("expected pending zone selection after token save, got %q", controller.sessions[1])
+	}
+}
+
 func TestSwitchingWizardShowsNotice(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	controller.setSession(1, pendingMasterURL)
@@ -255,6 +285,41 @@ func TestGroupDetailCanRenameGroup(t *testing.T) {
 	}
 }
 
+func TestGroupRenamePromptCleansUpAfterSuccess(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleUpdate(ctx, telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-group-rename",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "groups_rename:" + group.ID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "sg"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.containsDeletedMessageID(88) {
+		t.Fatalf("expected group rename prompt to be cleaned up, deleted=%v paths=%v", rec.deletedMessageIDs, rec.paths)
+	}
+	updated, err := controller.Store.GetGroupByID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "sg" {
+		t.Fatalf("expected group renamed to sg, got %+v", updated)
+	}
+}
+
 func TestNodesWizardCreatesNode(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
@@ -292,6 +357,30 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 		if !rec.contains(want) {
 			t.Fatalf("expected next-step button %q, got %v", want, rec.payloads)
 		}
+	}
+}
+
+func TestNodeNameAndIPPromptsCleansUpAfterSuccess(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.startNodeNamePrompt(ctx, 1, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "hk-01"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.containsDeletedMessageID(1) || !rec.containsDeletedMessageID(2) {
+		t.Fatalf("expected node prompts to be cleaned up, deleted=%v paths=%v", rec.deletedMessageIDs, rec.paths)
+	}
+	if controller.sessions[1] != pendingNodeConfirm {
+		t.Fatalf("expected node confirm state, got %q", controller.sessions[1])
 	}
 }
 
@@ -661,6 +750,67 @@ func TestDNSDetailShowsTTLAndCanUpdateTTL(t *testing.T) {
 	}
 }
 
+func TestDNSTTLPromptCleansUpAfterSuccess(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		record: cloudflare.DNSRecord{
+			ID:      "rec-1",
+			Type:    "A",
+			Name:    "hk.example.com",
+			Content: "203.0.113.10",
+			TTL:     60,
+		},
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleUpdate(ctx, telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-dns-ttl",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "dns_edit_ttl:" + group.ID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleUpdate(ctx, telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-dns-ttl-custom",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "dns_ttl_custom:" + group.ID,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if prompt := controller.prompt(1); prompt == nil || prompt.MessageID != 88 || prompt.State != pendingDNSTTL {
+		t.Fatalf("expected TTL prompt to be tracked on message 88, got %+v", prompt)
+	}
+	if err := controller.handleText(ctx, 1, "300"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.containsDeletedMessageID(88) {
+		t.Fatalf("expected DNS TTL prompt to be cleaned up, deleted=%v paths=%v", rec.deletedMessageIDs, rec.paths)
+	}
+	if controller.sessions[1] != "" {
+		t.Fatalf("expected DNS TTL flow cleared, got %q", controller.sessions[1])
+	}
+}
+
 func TestPolicyPanelShowsDefaultStrategyCenter(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	if err := controller.handleCallback(context.Background(), 1, "policy"); err != nil {
@@ -797,6 +947,37 @@ func TestPolicyThresholdWizardUpdatesPolicy(t *testing.T) {
 	}
 }
 
+func TestPolicyPromptCleansUpAfterSuccess(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	if err := controller.handleUpdate(ctx, telegram.Update{
+		CallbackQuery: &telegram.CallbackQuery{
+			ID:   "cb-policy-quota",
+			From: telegram.User{ID: 123},
+			Message: telegram.Message{
+				MessageID: 88,
+				Chat:      telegram.Chat{ID: 1},
+			},
+			Data: "policy_quota",
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "2000GB"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.containsDeletedMessageID(88) {
+		t.Fatalf("expected policy prompt to be cleaned up, deleted=%v paths=%v", rec.deletedMessageIDs, rec.paths)
+	}
+	policy, err := controller.Store.GetPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.DefaultMonthlyQuotaBytes != 2000*1024*1024*1024 {
+		t.Fatalf("expected policy quota to update, got %+v", policy)
+	}
+}
+
 func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
@@ -876,11 +1057,28 @@ func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	got := strings.TrimSpace(rec.messages[len(rec.messages)-1])
+	first := strings.TrimSpace(rec.messages[len(rec.messages)-1])
 	for _, want := range []string{"install-agent.sh", "--join", "--master https://example.com"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("expected pure command to contain %q, got %q", want, got)
+		if !strings.Contains(first, want) {
+			t.Fatalf("expected pure command to contain %q, got %q", want, first)
 		}
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.TrimSpace(rec.messages[len(rec.messages)-1])
+	if second != first {
+		t.Fatalf("expected repeated pure command copy to reuse join code, got %q then %q", first, second)
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	third := strings.TrimSpace(rec.messages[len(rec.messages)-1])
+	if third == first {
+		t.Fatalf("expected explicit regenerate to create a fresh command, got %q", third)
 	}
 }
 

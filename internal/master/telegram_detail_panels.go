@@ -24,7 +24,7 @@ func (c *TelegramController) startGroupRenamePrompt(ctx context.Context, chatID 
 	text := prefix + "请发送新的分组名。\n\n"
 	text += "当前分组：" + group.Name + "\n\n"
 	text += "发送 /cancel 取消。"
-	return c.sendMessageOrEdit(ctx, chatID, text, nil)
+	return c.sendPromptAndTrack(ctx, chatID, pendingGroupName, text, nil)
 }
 
 func (c *TelegramController) sendGroupDetail(ctx context.Context, chatID int64, groupID, prefix string) error {
@@ -187,6 +187,7 @@ func (c *TelegramController) updateDNSTTL(ctx context.Context, chatID int64, gro
 	if err != nil {
 		return c.sendMessageOrEdit(ctx, chatID, "TTL 更新失败："+friendlyCloudflareError(err), dnsTTLMenu(groupID))
 	}
+	c.completePrompt(ctx, chatID)
 	c.clearSession(chatID)
 	prefix := fmt.Sprintf("✅ TTL 已更新\n\n域名：%s\nTTL：%s", valueOrDash(cfg.RecordName), formatDNSTTL(cfg.TTL))
 	if strings.TrimSpace(cfg.RecordID) == "" {

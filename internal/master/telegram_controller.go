@@ -15,15 +15,17 @@ import (
 )
 
 type TelegramController struct {
-	Bot          *telegram.Bot
-	Store        *db.Store
-	PublicAPIURL string
-	PollTimeout  time.Duration
-	DNS          DNSProvider
-	sessions     map[int64]string
-	sessionMeta  map[int64]*telegramSessionMeta
-	callbackChat int64
-	callbackMsg  int64
+	Bot               *telegram.Bot
+	Store             *db.Store
+	PublicAPIURL      string
+	PollTimeout       time.Duration
+	DNS               DNSProvider
+	sessions          map[int64]string
+	sessionMeta       map[int64]*telegramSessionMeta
+	promptMeta        map[int64]*telegramPromptMeta
+	agentInstallCache map[string]agentInstallPreview
+	callbackChat      int64
+	callbackMsg       int64
 }
 
 type agentInstallPreview struct {
@@ -37,15 +39,22 @@ type agentInstallPreview struct {
 	WarningLines []string
 }
 
+type telegramPromptMeta struct {
+	State     string
+	MessageID int64
+}
+
 func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL string, pollTimeout time.Duration, dns DNSProvider) *TelegramController {
 	return &TelegramController{
-		Bot:          bot,
-		Store:        store,
-		PublicAPIURL: publicAPIURL,
-		PollTimeout:  pollTimeout,
-		DNS:          dns,
-		sessions:     make(map[int64]string),
-		sessionMeta:  make(map[int64]*telegramSessionMeta),
+		Bot:               bot,
+		Store:             store,
+		PublicAPIURL:      publicAPIURL,
+		PollTimeout:       pollTimeout,
+		DNS:               dns,
+		sessions:          make(map[int64]string),
+		sessionMeta:       make(map[int64]*telegramSessionMeta),
+		promptMeta:        make(map[int64]*telegramPromptMeta),
+		agentInstallCache: make(map[string]agentInstallPreview),
 	}
 }
 
@@ -63,6 +72,56 @@ func (c *TelegramController) clearSession(chatID int64) {
 	if c.sessionMeta != nil {
 		delete(c.sessionMeta, chatID)
 	}
+}
+
+func (c *TelegramController) setPrompt(chatID int64, state string, messageID int64) {
+	if c.promptMeta == nil {
+		c.promptMeta = make(map[int64]*telegramPromptMeta)
+	}
+	c.promptMeta[chatID] = &telegramPromptMeta{State: state, MessageID: messageID}
+}
+
+func (c *TelegramController) prompt(chatID int64) *telegramPromptMeta {
+	if c.promptMeta == nil {
+		return nil
+	}
+	return c.promptMeta[chatID]
+}
+
+func (c *TelegramController) clearPrompt(chatID int64) {
+	if c.promptMeta == nil {
+		return
+	}
+	delete(c.promptMeta, chatID)
+}
+
+func (c *TelegramController) cachedAgentInstallPreview(nodeID string) (agentInstallPreview, bool) {
+	if c.agentInstallCache == nil {
+		return agentInstallPreview{}, false
+	}
+	preview, ok := c.agentInstallCache[nodeID]
+	if !ok {
+		return agentInstallPreview{}, false
+	}
+	if preview.ExpiresAt.IsZero() || timeNow().After(preview.ExpiresAt) {
+		delete(c.agentInstallCache, nodeID)
+		return agentInstallPreview{}, false
+	}
+	return preview, true
+}
+
+func (c *TelegramController) storeAgentInstallPreview(nodeID string, preview agentInstallPreview) {
+	if c.agentInstallCache == nil {
+		c.agentInstallCache = make(map[string]agentInstallPreview)
+	}
+	c.agentInstallCache[nodeID] = preview
+}
+
+func (c *TelegramController) clearAgentInstallPreview(nodeID string) {
+	if c.agentInstallCache == nil {
+		return
+	}
+	delete(c.agentInstallCache, nodeID)
 }
 
 func (c *TelegramController) Run(ctx context.Context) error {
@@ -140,7 +199,7 @@ func (c *TelegramController) handleCallback(ctx context.Context, chatID int64, d
 	case "agent":
 		return c.sendAgentPanel(ctx, chatID, c.replaceSession(chatID))
 	case "switch":
-		return c.sendMessageOrEdit(ctx, chatID, "手动切换：/switch <分组名> <节点名>", nil)
+		return c.sendSwitchPanel(ctx, chatID, c.replaceSession(chatID))
 	case "help":
 		return c.sendMessageOrEdit(ctx, chatID, helpText(), nil)
 	default:
@@ -154,6 +213,7 @@ func (c *TelegramController) handleText(ctx context.Context, chatID int64, text 
 
 func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64, text string, messageID int64) error {
 	if text == "/cancel" {
+		c.cancelPrompt(ctx, chatID)
 		c.clearSession(chatID)
 		return c.sendMessageOrEdit(ctx, chatID, "已取消当前配置。", nil)
 	}
@@ -414,7 +474,7 @@ func (c *TelegramController) handleAgentCommand(ctx context.Context, chatID int6
 
 func (c *TelegramController) handleSwitchCommand(ctx context.Context, chatID int64, parts []string) error {
 	if len(parts) < 3 {
-		return c.sendMessageOrEdit(ctx, chatID, "手动切换：/switch <分组名> <节点名>", nil)
+		return c.sendSwitchPanel(ctx, chatID, c.replaceSession(chatID))
 	}
 	group, err := c.Store.GetGroupByName(ctx, parts[1])
 	if err != nil {
@@ -687,17 +747,123 @@ func (c *TelegramController) withCallbackMessage(chatID, messageID int64, fn fun
 }
 
 func (c *TelegramController) sendMessageOrEdit(ctx context.Context, chatID int64, text string, markup *telegram.ReplyMarkup) error {
+	_, err := c.sendMessageOrEditWithID(ctx, chatID, text, markup)
+	return err
+}
+
+func (c *TelegramController) sendMessageOrEditWithID(ctx context.Context, chatID int64, text string, markup *telegram.ReplyMarkup) (int64, error) {
 	if c.callbackChat == chatID && c.callbackMsg > 0 {
 		err := c.Bot.EditMessageText(ctx, chatID, c.callbackMsg, text, markup)
 		if err == nil {
-			return nil
+			return c.callbackMsg, nil
 		}
 		var apiErr telegram.APIError
 		if errors.As(err, &apiErr) && strings.Contains(strings.ToLower(apiErr.Description), "message is not modified") {
-			return nil
+			return c.callbackMsg, nil
 		}
 	}
-	return c.Bot.SendMessage(ctx, chatID, text, markup)
+	msg, err := c.Bot.SendMessageWithResult(ctx, chatID, text, markup)
+	if err != nil {
+		return 0, err
+	}
+	return msg.MessageID, nil
+}
+
+func (c *TelegramController) sendPromptAndTrack(ctx context.Context, chatID int64, state, text string, markup *telegram.ReplyMarkup) error {
+	c.cleanupPrompt(ctx, chatID, "⛔ 已切换到新的配置流程")
+	messageID, err := c.sendMessageOrEditWithID(ctx, chatID, text, markup)
+	if err != nil {
+		return err
+	}
+	c.setPrompt(chatID, state, messageID)
+	return nil
+}
+
+func (c *TelegramController) cleanupPrompt(ctx context.Context, chatID int64, completedText string) {
+	prompt := c.prompt(chatID)
+	if prompt == nil {
+		return
+	}
+	defer c.clearPrompt(chatID)
+	if prompt.MessageID <= 0 {
+		return
+	}
+	if err := c.Bot.DeleteMessage(ctx, chatID, prompt.MessageID); err == nil {
+		return
+	}
+	if strings.TrimSpace(completedText) == "" {
+		return
+	}
+	err := c.Bot.EditMessageText(ctx, chatID, prompt.MessageID, completedText, nil)
+	if err == nil {
+		return
+	}
+	var apiErr telegram.APIError
+	if errors.As(err, &apiErr) && strings.Contains(strings.ToLower(apiErr.Description), "message is not modified") {
+		return
+	}
+}
+
+func (c *TelegramController) completePrompt(ctx context.Context, chatID int64) {
+	prompt := c.prompt(chatID)
+	if prompt == nil {
+		return
+	}
+	cleanupText := c.promptCompletionText(chatID, prompt.State)
+	c.cleanupPrompt(ctx, chatID, cleanupText)
+}
+
+func (c *TelegramController) cancelPrompt(ctx context.Context, chatID int64) {
+	c.cleanupPrompt(ctx, chatID, "⛔ 已取消当前配置")
+}
+
+func (c *TelegramController) promptCompletionText(chatID int64, state string) string {
+	switch state {
+	case pendingMasterURL:
+		return "✅ 已完成：Master 公网地址"
+	case pendingCloudflareToken:
+		return "✅ 已完成：Cloudflare Token"
+	case pendingCloudflareZoneName:
+		return "✅ 已完成：Zone Name"
+	case pendingDNSRecordName:
+		return "✅ 已完成：DNS A 记录名称"
+	case pendingDNSTTL:
+		return "✅ 已完成：TTL"
+	case pendingGroupName:
+		return "✅ 已完成：分组名称"
+	case pendingNodeName:
+		return "✅ 已完成：节点名称"
+	case pendingNodeIP:
+		return "✅ 已完成：节点公网 IP"
+	case pendingNodeQuota:
+		return "✅ 已完成：默认月流量"
+	case pendingNodeThreshold:
+		return "✅ 已完成：默认阈值"
+	case pendingNodeModeSelect:
+		return "✅ 已完成：统计模式"
+	case pendingNodeResetDay:
+		return "✅ 已完成：默认重置日"
+	case pendingNodePriority:
+		return "✅ 已完成：节点 priority"
+	case pendingNodeConfirm:
+		if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit" {
+			return "✅ 已完成：节点策略"
+		}
+		return "✅ 已完成：节点创建"
+	case pendingPolicyValue:
+		switch c.currentSessionValue(chatID, sessionKeyPolicyField) {
+		case policyFieldQuota:
+			return "✅ 已完成：默认月流量"
+		case policyFieldThreshold:
+			return "✅ 已完成：默认阈值"
+		case policyFieldResetDay:
+			return "✅ 已完成：默认重置日"
+		default:
+			return "✅ 已完成：默认策略值"
+		}
+	default:
+		return "✅ 已完成"
+	}
 }
 
 func valueOrDash(v string) string {
@@ -721,7 +887,7 @@ func (c *TelegramController) sendMasterURLPrompt(ctx context.Context, chatID int
 
 func (c *TelegramController) sendMasterURLPromptWithPrefix(ctx context.Context, chatID int64, prefix string) error {
 	suggested := c.ensureSuggestedMasterPublicURL(ctx)
-	return c.sendMessageOrEdit(ctx, chatID, prefix+masterURLHelp(suggested), masterURLPromptMenu(suggested))
+	return c.sendPromptAndTrack(ctx, chatID, pendingMasterURL, prefix+masterURLHelp(suggested), masterURLPromptMenu(suggested))
 }
 
 func (c *TelegramController) ensureSuggestedMasterPublicURL(ctx context.Context) string {
@@ -779,6 +945,7 @@ func (c *TelegramController) saveMasterPublicURL(ctx context.Context, chatID int
 	if err := c.Store.SetMasterPublicURL(ctx, value); err != nil {
 		return err
 	}
+	c.completePrompt(ctx, chatID)
 	c.clearSession(chatID)
 	msg := "✅ Master 公网地址已保存：\n" + value + "\n\n下一步：配置 Cloudflare"
 	if normalized {
@@ -812,7 +979,7 @@ func (c *TelegramController) saveCloudflareConfig(ctx context.Context, chatID in
 	}
 	_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "✅ Zone 已验证")
 	_ = c.Store.ClearLastError(ctx, errorKeyCloudflareZone)
-	return c.sendMessageOrEdit(ctx, chatID, "✅ Cloudflare 已保存：Token "+config.MaskSecret(token)+"，Zone "+zoneName+"，Zone ID "+zoneID, cloudflareSavedMenu())
+	return c.sendMessageOrEdit(ctx, chatID, "✅ Cloudflare 已保存：Token "+config.MaskSecret(token)+"，Zone "+zoneName+"，Zone ID "+maskMiddle(zoneID, 4, 4), cloudflareSavedMenu())
 }
 
 func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Group, recordName, recordID string, ttl int, proxied bool) (string, string, error) {
@@ -893,7 +1060,42 @@ func (c *TelegramController) createAgentInstallCommand(ctx context.Context, node
 	return preview.Command, preview.ExpiresAt, preview.Missing, nil
 }
 
+func (c *TelegramController) getAgentInstallPreview(ctx context.Context, nodeID string, policy db.Policy, refresh bool) (agentInstallPreview, error) {
+	base, err := c.buildAgentInstallPreviewBase(ctx, nodeID)
+	if err != nil {
+		return agentInstallPreview{}, err
+	}
+	if len(base.Missing) > 0 {
+		if refresh {
+			c.clearAgentInstallPreview(nodeID)
+		}
+		return base, nil
+	}
+	if !refresh {
+		if cached, ok := c.cachedAgentInstallPreview(nodeID); ok {
+			return cached, nil
+		}
+	}
+	preview, err := c.finalizeAgentInstallPreview(ctx, base, nodeID, policy)
+	if err != nil {
+		return agentInstallPreview{}, err
+	}
+	c.storeAgentInstallPreview(nodeID, preview)
+	return preview, nil
+}
+
 func (c *TelegramController) buildAgentInstallPreview(ctx context.Context, nodeID string, policy db.Policy) (agentInstallPreview, error) {
+	base, err := c.buildAgentInstallPreviewBase(ctx, nodeID)
+	if err != nil {
+		return agentInstallPreview{}, err
+	}
+	if len(base.Missing) > 0 {
+		return base, nil
+	}
+	return c.finalizeAgentInstallPreview(ctx, base, nodeID, policy)
+}
+
+func (c *TelegramController) buildAgentInstallPreviewBase(ctx context.Context, nodeID string) (agentInstallPreview, error) {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "节点不存在")
@@ -928,12 +1130,17 @@ func (c *TelegramController) buildAgentInstallPreview(ctx context.Context, nodeI
 	if err != nil {
 		return agentInstallPreview{}, err
 	}
+	_ = c.Store.ClearLastError(ctx, errorKeyAgentInstall)
+	return preview, nil
+}
+
+func (c *TelegramController) finalizeAgentInstallPreview(ctx context.Context, preview agentInstallPreview, nodeID string, policy db.Policy) (agentInstallPreview, error) {
 	code, expiresAt, err := c.Store.GenerateJoinCodeWithExpiry(ctx, nodeID, 30*time.Minute)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "生成加入码失败")
 		return agentInstallPreview{}, err
 	}
-	command, err := BuildAgentInstallCommand(publicURL, installURL(policy), code)
+	command, err := BuildAgentInstallCommand(preview.PublicURL, installURL(policy), code)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, err.Error())
 		return agentInstallPreview{}, err

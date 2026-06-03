@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -163,24 +164,35 @@ func newTestTelegramController(t *testing.T) (*TelegramController, *recordingTel
 }
 
 type recordingTelegramClient struct {
-	messages []string
-	payloads []string
-	paths    []string
+	messages          []string
+	payloads          []string
+	paths             []string
+	deletedMessageIDs []int64
+	nextMessageID     int64
 }
 
 func (c *recordingTelegramClient) Do(req *http.Request) (*http.Response, error) {
 	body, _ := io.ReadAll(req.Body)
 	c.paths = append(c.paths, req.URL.Path)
+	var payload map[string]any
 	if len(body) > 0 {
 		c.payloads = append(c.payloads, string(body))
-		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err == nil {
 			if text, ok := payload["text"].(string); ok {
 				c.messages = append(c.messages, text)
 			}
+			if strings.HasSuffix(req.URL.Path, "/deleteMessage") {
+				if messageID, ok := payload["message_id"].(float64); ok {
+					c.deletedMessageIDs = append(c.deletedMessageIDs, int64(messageID))
+				}
+			}
 		}
 	}
 	response := `{"ok":true,"result":{}}`
+	if strings.HasSuffix(req.URL.Path, "/sendMessage") {
+		c.nextMessageID++
+		response = fmt.Sprintf(`{"ok":true,"result":{"message_id":%d}}`, c.nextMessageID)
+	}
 	return &http.Response{
 		StatusCode: 200,
 		Body:       io.NopCloser(bytes.NewBufferString(response)),
@@ -206,4 +218,13 @@ func (c *recordingTelegramClient) countPath(suffix string) int {
 		}
 	}
 	return count
+}
+
+func (c *recordingTelegramClient) containsDeletedMessageID(id int64) bool {
+	for _, got := range c.deletedMessageIDs {
+		if got == id {
+			return true
+		}
+	}
+	return false
 }

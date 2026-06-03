@@ -146,6 +146,21 @@ func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string, markup
 	return b.post(ctx, "/sendMessage", payload)
 }
 
+func (b *Bot) SendMessageWithResult(ctx context.Context, chatID int64, text string, markup *ReplyMarkup) (Message, error) {
+	payload := map[string]any{
+		"chat_id": chatID,
+		"text":    text,
+	}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
+	var out Message
+	if err := b.postResult(ctx, "/sendMessage", payload, &out); err != nil {
+		return Message{}, err
+	}
+	return out, nil
+}
+
 func (b *Bot) EditMessageText(ctx context.Context, chatID, messageID int64, text string, markup *ReplyMarkup) error {
 	payload := map[string]any{
 		"chat_id":    chatID,
@@ -226,6 +241,10 @@ func (b *Bot) get(ctx context.Context, path string, result any) error {
 }
 
 func (b *Bot) post(ctx context.Context, path string, payload any) error {
+	return b.postResult(ctx, path, payload, nil)
+}
+
+func (b *Bot) postResult(ctx context.Context, path string, payload any, result any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -246,6 +265,7 @@ func (b *Bot) post(ctx context.Context, path string, payload any) error {
 	}
 	var generic struct {
 		OK          bool   `json:"ok"`
+		Result      json.RawMessage `json:"result"`
 		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(respBody, &generic); err != nil {
@@ -254,5 +274,8 @@ func (b *Bot) post(ctx context.Context, path string, payload any) error {
 	if !generic.OK {
 		return APIError{Description: generic.Description}
 	}
-	return nil
+	if result == nil {
+		return nil
+	}
+	return json.Unmarshal(generic.Result, result)
 }

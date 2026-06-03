@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.1.0-alpha.10
+
+- Telegram 的 pending prompt 统一改为可追踪的编辑/删除流程，Cloudflare Token、Zone Name、DNS TTL、DNS A 记录、分组、节点名、节点 IP 和策略输入在成功或 `/cancel` 后都会清理提示消息。
+- Agent 安装命令改为按节点缓存 join code，纯命令复制不会每次点击都生成新码，只有点“重新生成命令”才会刷新。
+- DNS help 与向导文案继续对齐到 `<A记录>` 和 `example.com` 占位值，避免帮助文本和真实参数不一致。
+- 版本升级到 `0.1.0-alpha.10`，同步更新安装脚本、README 和测试。
+
 ## 0.1.0-alpha.9
 
 - Telegram 状态页在按钮入口下改为带导航的状态面板，支持“刷新状态 / DNS 配置 / 节点管理 / 返回主菜单”，并继续优先使用 `editMessageText` 更新当前消息。
