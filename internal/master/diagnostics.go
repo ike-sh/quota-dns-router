@@ -49,6 +49,7 @@ type NodeDiagnostic struct {
 	GroupName         string
 	PublicIP          string
 	Online            bool
+	HasReported       bool
 	LastReportedText  string
 	TrafficMode       string
 	UsedBytes         int64
@@ -236,7 +237,8 @@ func BuildNodeDiagnostics(ctx context.Context, store *db.Store, now time.Time) (
 		}
 		for _, usage := range usages {
 			lastText := "从未上报"
-			if usage.LastReportedAt.Valid {
+			hasReported := usage.LastReportedAt.Valid
+			if hasReported {
 				age := now.Sub(usage.LastReportedAt.Time)
 				lastText = formatAge(age) + "前"
 			}
@@ -247,6 +249,7 @@ func BuildNodeDiagnostics(ctx context.Context, store *db.Store, now time.Time) (
 				GroupName:         group.Name,
 				PublicIP:          usage.PublicIP,
 				Online:            nodeIsReachable(usage, policy, now),
+				HasReported:       hasReported,
 				LastReportedText:  lastText,
 				TrafficMode:       usage.TrafficMode,
 				UsedBytes:         usage.UsedBytes,
@@ -281,6 +284,7 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		if err != nil {
 			return nil, err
 		}
+		hasReported := false
 		currentNode := "-"
 		currentIP := "-"
 		if dns != nil && cfg.ZoneID != "" && cfg.RecordName != "" {
@@ -296,6 +300,9 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		}
 		availableTargets := 0
 		for _, usage := range usages {
+			if usage.LastReportedAt.Valid {
+				hasReported = true
+			}
 			if currentNode == "-" && group.CurrentNodeID.Valid && usage.ID == group.CurrentNodeID.String {
 				currentNode = usage.Name
 				currentIP = usage.PublicIP
@@ -319,10 +326,16 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 			lastSwitchText = group.LastSwitchAt.Time.Format(time.RFC3339)
 		}
 		status := "✅ 可自动切换"
-		if !autoSwitch {
+		if strings.TrimSpace(cfg.RecordName) == "" {
+			status = "⏳ 待配置 DNS A 记录"
+		} else if !autoSwitch {
 			status = "⚠️ 全局自动切换未启用"
 		} else if availableTargets == 0 {
-			status = "⚠️ 没有可用切换目标"
+			if hasReported {
+				status = "⚠️ 没有可用切换目标"
+			} else {
+				status = "⏳ 等待 Agent 首次上线"
+			}
 		}
 		out = append(out, GroupDiagnostic{
 			Name:                 group.Name,
@@ -474,10 +487,13 @@ func FormatNodeDiagnostics(items []NodeDiagnostic) string {
 		b.WriteString("\n\n" + item.Name + "\n")
 		b.WriteString("IP：" + item.PublicIP + "\n")
 		b.WriteString("分组：" + item.GroupName + "\n")
-		if item.Online {
+		switch {
+		case !item.HasReported:
+			b.WriteString("Agent：🟡 未安装 / 未上线\n")
+		case item.Online:
 			b.WriteString("Agent：✅ 在线，最后上报 " + item.LastReportedText + "\n")
-		} else {
-			b.WriteString("Agent：❌ 离线，最后上报 " + item.LastReportedText + "\n")
+		default:
+			b.WriteString("Agent：⚠️ 离线，最后上报 " + item.LastReportedText + "\n")
 		}
 		b.WriteString("统计：" + modeLabel(item.TrafficMode) + "\n")
 		b.WriteString("已用：" + humanBytes(item.UsedBytes) + " / " + humanBytes(item.MonthlyQuotaBytes) + "\n")
@@ -489,6 +505,8 @@ func FormatNodeDiagnostics(items []NodeDiagnostic) string {
 		b.WriteString(fmt.Sprintf("priority：%d\n", item.Priority))
 		if item.ReachedThreshold {
 			b.WriteString("状态：⚠️ 已达到阈值\n")
+		} else if !item.HasReported {
+			b.WriteString("状态：🟡 待安装 Agent\n")
 		} else if !item.Online {
 			b.WriteString("状态：⚠️ Agent 离线\n")
 		} else {

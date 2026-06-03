@@ -406,7 +406,11 @@ func (c *TelegramController) sendDNSPanel(ctx context.Context, chatID int64, pre
 	}
 	text := prefix + "🌐 DNS 配置\n\n"
 	text += "当前 Zone：" + valueOrDash(zoneName) + "\n"
-	text += fmt.Sprintf("已配置 DNS A 记录：%d\n\n请选择操作：", count)
+	text += fmt.Sprintf("已配置 DNS A 记录：%d\n", count)
+	if count == 0 {
+		text += "建议：先为分组添加第一条 DNS A 记录，再继续生成 Agent 安装命令。\n"
+	}
+	text += "\n请选择操作："
 	return c.Bot.SendMessage(ctx, chatID, text, dnsPanelMenu())
 }
 
@@ -499,10 +503,14 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 			return saveErr
 		}
 		nodes, nodesErr := c.Store.ListNodesByGroupID(ctx, group.ID)
+		matchedNodeID := ""
+		matchedNodeName := ""
 		if nodesErr == nil {
 			for _, node := range nodes {
 				if node.PublicIP == record.Content {
 					_ = c.Store.UpdateGroupCurrentNode(ctx, group.ID, node.ID)
+					matchedNodeID = node.ID
+					matchedNodeName = node.Name
 					break
 				}
 			}
@@ -512,8 +520,8 @@ func (c *TelegramController) handleDNSRecordNameInput(ctx context.Context, chatI
 		_ = c.Store.ClearLastError(ctx, errorKeyDNSLookup(group.ID))
 		_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
 		c.clearSession(chatID)
-		text := fmt.Sprintf("✅ DNS 已保存\n\n分组：%s\nRecord：%s\nRecord ID：%s\n当前 IP：%s", group.Name, cfg.RecordName, valueOrDash(cfg.RecordID), valueOrDash(record.Content))
-		return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu())
+		text := formatDNSSavedMessage(group.Name, cfg.RecordName, record.Content, matchedNodeName, false)
+		return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu(matchedNodeID))
 	}
 	if any, anyErr := c.DNS.LookupDNSRecordAnyType(ctx, token, zoneID, recordName); anyErr == nil {
 		msg := fmt.Sprintf("当前记录类型为 %s，不支持。请改为 A 记录后重试。", any.Type)
@@ -548,7 +556,7 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 	if err != nil {
 		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", dnsPanelMenu())
 	}
-	token, zoneName, zoneID, err := c.Store.GetCloudflareDefaults(ctx)
+	token, _, zoneID, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
 		return err
 	}
@@ -573,11 +581,8 @@ func (c *TelegramController) handleDNSCreateRecord(ctx context.Context, chatID i
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSLookup(group.ID))
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
 	c.clearSession(chatID)
-	text := fmt.Sprintf("✅ DNS 已创建并保存\n\n分组：%s\nRecord：%s\nRecord ID：%s\n初始节点：%s / %s", group.Name, cfg.RecordName, valueOrDash(cfg.RecordID), node.Name, node.PublicIP)
-	if zoneName != "" {
-		text += "\n当前 Zone：" + zoneName
-	}
-	return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu())
+	text := formatDNSSavedMessage(group.Name, cfg.RecordName, node.PublicIP, node.Name, true)
+	return c.Bot.SendMessage(ctx, chatID, text, dnsSavedMenu(node.ID))
 }
 
 func (c *TelegramController) sendGroupsPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -789,7 +794,7 @@ func (c *TelegramController) handleNodeConfirm(ctx context.Context, chatID int64
 		return c.Bot.SendMessage(ctx, chatID, "❌ 创建节点失败："+err.Error()+"\n\n请重新填写。", nodeConfirmMenu())
 	}
 	c.clearSession(chatID)
-	return c.Bot.SendMessage(ctx, chatID, "✅ 节点已创建："+created.Name+"\n\n下一步：", nodeCreatedMenu(created.ID))
+	return c.sendNodeCreatedSummary(ctx, chatID, created)
 }
 
 func (c *TelegramController) sendPolicyPanel(ctx context.Context, chatID int64, prefix string) error {
@@ -887,23 +892,21 @@ func (c *TelegramController) sendAgentPanel(ctx context.Context, chatID int64, p
 }
 
 func (c *TelegramController) sendAgentInstallCommand(ctx context.Context, chatID int64, nodeID string) error {
-	node, err := c.Store.GetNodeByID(ctx, nodeID)
-	if err != nil {
+	if _, err := c.Store.GetNodeByID(ctx, nodeID); err != nil {
 		return c.Bot.SendMessage(ctx, chatID, "节点不存在，请重新选择。", agentPanelMenu())
 	}
 	policy, err := c.Store.GetPolicy(ctx)
 	if err != nil {
 		return err
 	}
-	command, _, missing, err := c.createAgentInstallCommand(ctx, node.ID, policy)
+	preview, err := c.buildAgentInstallPreview(ctx, nodeID, policy)
 	if err != nil {
 		return err
 	}
-	if len(missing) > 0 {
-		return c.Bot.SendMessage(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(missing, "、"), setupMenu())
+	if len(preview.Missing) > 0 {
+		return c.Bot.SendMessage(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(preview.Missing, "、"), setupMenu())
 	}
-	text := fmt.Sprintf("请在节点 %s 上执行：\n\n%s\n\njoin code 有效期：30 分钟", node.Name, command)
-	return c.Bot.SendMessage(ctx, chatID, text, agentCommandMenu())
+	return c.Bot.SendMessage(ctx, chatID, formatAgentInstallMessage(preview), agentCommandMenu(preview.DNSReady))
 }
 
 func (c *TelegramController) tryDeleteMessage(ctx context.Context, chatID, messageID int64) {
@@ -975,9 +978,14 @@ func dnsNeedNodeMenu() *telegram.ReplyMarkup {
 	}}
 }
 
-func dnsSavedMenu() *telegram.ReplyMarkup {
+func dnsSavedMenu(nodeID string) *telegram.ReplyMarkup {
+	callback := "agent"
+	if strings.TrimSpace(nodeID) != "" {
+		callback = "agent_node:" + nodeID
+	}
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
-		{{Text: "查看 DNS 状态", CallbackData: "dns_status"}},
+		{{Text: "Agent 安装", CallbackData: callback}},
+		{{Text: "当前状态", CallbackData: "status"}},
 		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
@@ -1079,10 +1087,18 @@ func nodeConfirmMenu() *telegram.ReplyMarkup {
 	}}
 }
 
-func nodeCreatedMenu(nodeID string) *telegram.ReplyMarkup {
+func nodeCreatedMenu(nodeID string, hasDNS bool) *telegram.ReplyMarkup {
+	if !hasDNS {
+		return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+			{{Text: "配置 DNS", CallbackData: "dns"}},
+			{{Text: "继续生成 Agent 命令", CallbackData: "agent_node:" + nodeID}},
+			{{Text: "当前状态", CallbackData: "status"}},
+			{{Text: "返回主菜单", CallbackData: "menu"}},
+		}}
+	}
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "生成 Agent 安装命令", CallbackData: "agent_node:" + nodeID}},
-		{{Text: "配置 DNS", CallbackData: "dns"}},
+		{{Text: "当前状态", CallbackData: "status"}},
 		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
@@ -1134,10 +1150,16 @@ func agentNodeMenu(nodes []db.NodeWithGroup) *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func agentCommandMenu() *telegram.ReplyMarkup {
-	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
-		{{Text: "返回主菜单", CallbackData: "menu"}},
-	}}
+func agentCommandMenu(hasDNS bool) *telegram.ReplyMarkup {
+	rows := make([][]telegram.InlineKeyboardButton, 0, 3)
+	if !hasDNS {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "配置 DNS", CallbackData: "dns"}})
+	}
+	rows = append(rows,
+		[]telegram.InlineKeyboardButton{{Text: "当前状态", CallbackData: "status"}},
+		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
+	)
+	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
 func masterSavedMenu() *telegram.ReplyMarkup {

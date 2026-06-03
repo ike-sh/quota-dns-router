@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.1.0-alpha.5
+
+- 调整 Telegram 推荐初始化顺序为 Master 公网地址 -> Cloudflare -> 分组 -> 节点 -> DNS -> Agent -> 状态，并把节点创建后的主推荐按钮改为 DNS 优先。
+- Agent 安装命令页面增加节点、分组、Master URL、join code 到期时间，以及“无 DNS 记录”或“DNS IP 未匹配节点”的显式 warning。
+- `/dns` 成功保存或创建后，直接提示匹配节点和下一步 Agent 安装；`/status` 与 `/nodes` 区分“未安装/未上线”和“离线”。
+- `install-agent.sh` 新增 `--yes` 兼容参数、磁盘空间检查、系统 Go 优先复用、apt 优先安装、官方 Go tarball 临时目录解压与最后 50 行错误输出。
+- `install-agent.sh` 构建后强制执行 `qdr-agent version` 校验；`install-master.sh` 同步增加磁盘空间检查和安全 Go fallback。
+- 版本升级到 `0.1.0-alpha.5`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+
 ## 0.1.0-alpha.4
 
 - Telegram 初始化流程改为“按钮 + 向导”优先，覆盖 Cloudflare、DNS、分组、节点、策略和 Agent 安装。

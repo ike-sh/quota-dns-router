@@ -1024,7 +1024,7 @@ func (s *Store) BuildStatusSummary(ctx context.Context, at time.Time) (StatusSum
 			DNSRecord: cfg.RecordName,
 		}
 		for _, usage := range usages {
-			lastReported := "-"
+			lastReported := "从未上报"
 			if usage.LastReportedAt.Valid {
 				lastReported = usage.LastReportedAt.Time.Format(time.RFC3339)
 			}

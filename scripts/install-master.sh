@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.4"
+VERSION="0.1.0-alpha.5"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -12,6 +12,7 @@ REPO="${QDR_REPO:-https://github.com/ike-sh/quota-dns-router}"
 BRANCH="${QDR_BRANCH:-main}"
 GO_VERSION="${QDR_GO_VERSION:-1.25.0}"
 MIN_GO_VERSION="${QDR_MIN_GO_VERSION:-1.25.0}"
+GO_TARBALL_MIN_SPACE_MB=800
 YES=0
 DRY_RUN=0
 STAGE="初始化"
@@ -54,7 +55,7 @@ on_error() {
   echo
   echo "安装失败：${STAGE}" >&2
   echo "失败命令：${BASH_COMMAND}" >&2
-  echo "建议：确认网络可访问 GitHub/raw.githubusercontent.com，或使用 --dry-run 检查参数；systemd 失败时请查看 journalctl -u quota-dns-router-master -n 100 --no-pager。" >&2
+  echo "建议：确认网络可访问 GitHub/raw.githubusercontent.com，必要时先执行 df -h 检查磁盘空间；systemd 失败时请查看 journalctl -u quota-dns-router-master -n 100 --no-pager。" >&2
   exit "$code"
 }
 
@@ -122,12 +123,53 @@ current_go_version() {
     echo ""
     return
   fi
-  go env GOVERSION 2>/dev/null | sed 's/^go//'
+  go version 2>/dev/null | awk '{print $3}' | sed 's/^go//'
 }
 
 go_is_ready() {
   current="$(current_go_version)"
   [ -n "$current" ] && version_ge "$current" "$MIN_GO_VERSION"
+}
+
+check_disk_space() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] df -Pm /usr/local /tmp"
+    return
+  fi
+  df -Pm /usr/local /tmp
+}
+
+available_space_mb() {
+  df -Pm "$1" | awk 'NR==2 {print $4}'
+}
+
+ensure_space_for_go_fallback() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 检查 /usr/local 和 /tmp 可用空间是否 >= ${GO_TARBALL_MIN_SPACE_MB}MB"
+    return
+  fi
+  local usr_local_avail tmp_avail
+  usr_local_avail="$(available_space_mb /usr/local)"
+  tmp_avail="$(available_space_mb /tmp)"
+  if [ -z "$usr_local_avail" ] || [ -z "$tmp_avail" ]; then
+    echo "无法检查 /usr/local 或 /tmp 的可用空间。"
+    exit 1
+  fi
+  if [ "$usr_local_avail" -lt "$GO_TARBALL_MIN_SPACE_MB" ] || [ "$tmp_avail" -lt "$GO_TARBALL_MIN_SPACE_MB" ]; then
+    echo "可用磁盘空间不足，无法安全使用官方 Go tarball fallback。"
+    echo "请先执行 df -h，释放 /usr/local 和 /tmp 空间后重试。"
+    exit 1
+  fi
+}
+
+print_go_tar_failure() {
+  local log_file="$1"
+  echo "Go 工具链解压失败。"
+  echo "可能是磁盘空间不足、下载不完整、权限问题。"
+  echo "建议执行 df -h 后重新安装。"
+  if [ -f "$log_file" ]; then
+    tail -n 50 "$log_file" || true
+  fi
 }
 
 install_dependencies() {
@@ -165,19 +207,36 @@ install_official_go() {
   if go_is_ready; then
     return
   fi
+  ensure_space_for_go_fallback
   go_arch="$(detect_go_arch)"
   url="https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz"
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] curl -fsSL ${url} -o /tmp/go.tgz"
-    echo "[dry-run] 安装 Go 到 /usr/local/go"
+    echo "[dry-run] GO_TMP=\"\$(mktemp -d)\""
+    echo "[dry-run] curl -fL --retry 3 --connect-timeout 10 -o \"\$GO_TMP/go.tgz\" ${url}"
+    echo "[dry-run] mkdir -p \"\$GO_TMP/extract\""
+    echo "[dry-run] tar -C \"\$GO_TMP/extract\" -xzf \"\$GO_TMP/go.tgz\""
+    echo "[dry-run] test -x \"\$GO_TMP/extract/go/bin/go\""
+    echo "[dry-run] rm -rf /usr/local/go"
+    echo "[dry-run] mv \"\$GO_TMP/extract/go\" /usr/local/go"
     return
   fi
-  go_tmp="$(mktemp -d)"
-  curl -fsSL "$url" -o "${go_tmp}/go.tgz"
+  GO_TMP="$(mktemp -d)"
+  curl -fL --retry 3 --connect-timeout 10 -o "${GO_TMP}/go.tgz" "$url"
+  mkdir -p "${GO_TMP}/extract"
+  tar_log="${GO_TMP}/go-tar.log"
+  if ! tar -C "${GO_TMP}/extract" -xzf "${GO_TMP}/go.tgz" 2>"${tar_log}"; then
+    print_go_tar_failure "${tar_log}"
+    exit 1
+  fi
+  if [ ! -x "${GO_TMP}/extract/go/bin/go" ]; then
+    echo "Go 工具链解压后未找到 go/bin/go。"
+    print_go_tar_failure "${tar_log}"
+    exit 1
+  fi
   rm -rf /usr/local/go
-  tar -C /usr/local -xzf "${go_tmp}/go.tgz"
+  mv "${GO_TMP}/extract/go" /usr/local/go
   export PATH="/usr/local/go/bin:${PATH}"
-  if ! go_is_ready; then
+  if ! go version >/dev/null 2>&1 || ! go_is_ready; then
     echo "Go 工具链安装后仍不可用，请检查 /usr/local/go/bin/go。"
     exit 1
   fi
@@ -208,11 +267,18 @@ prepare_source() {
 build_master() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] cd ${SRC_DIR} && go build -o qdr-master ./cmd/qdr-master"
+    echo "[dry-run] ${BUILD_DIR:-/tmp/qdr-master-build}/${BIN_NAME} version"
     echo "[dry-run] install -m 0755 qdr-master ${PREFIX}/${BIN_NAME}"
     return
   fi
   BUILD_DIR="$(mktemp -d)"
   (cd "$SRC_DIR" && go build -o "${BUILD_DIR}/${BIN_NAME}" ./cmd/qdr-master)
+  built_version="$("${BUILD_DIR}/${BIN_NAME}" version | tr -d '\r')"
+  expected_version="quota-dns-router master ${VERSION}"
+  if [ "$built_version" != "$expected_version" ]; then
+    echo "qdr-master version 校验失败：期望 ${expected_version}，实际 ${built_version}"
+    exit 1
+  fi
   install -m 0755 "${BUILD_DIR}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
 }
 
@@ -365,6 +431,7 @@ collect_config
 step "[1/8] 检查系统环境"
 require_root
 detect_go_arch >/dev/null
+check_disk_space
 
 step "[2/8] 安装依赖"
 install_dependencies
@@ -391,7 +458,7 @@ start_service
 step "[8/8] 安装完成"
 check_service
 echo "Master 已安装并启动。"
-echo "下一步：在 Telegram 向 Bot 发送 /start，然后按按钮依次完成 Master 公网地址、Cloudflare、DNS、分组、节点和 Agent 安装。"
+echo "下一步：在 Telegram 向 Bot 发送 /start，然后按按钮依次完成 Master 公网地址、Cloudflare、分组、节点、DNS 和 Agent 安装。"
 if [ -n "$SUGGESTED_PUBLIC_API_URL" ]; then
   echo "检测到公网地址建议："
   echo "$SUGGESTED_PUBLIC_API_URL"

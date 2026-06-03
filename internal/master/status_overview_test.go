@@ -69,13 +69,23 @@ func TestStatusRiskPriorityOrder(t *testing.T) {
 			CooldownRemaining:    "5m0s",
 		}},
 		Nodes: []NodeDiagnostic{
-			{Name: "hk-01", Online: true, ReachedThreshold: true},
-			{Name: "hk-03", Online: false},
+			{Name: "hk-01", GroupName: "hk", Online: true, HasReported: true, ReachedThreshold: true},
+			{Name: "hk-03", GroupName: "hk", Online: false, HasReported: true},
 		},
 	})
+	wantPending := []string{
+		"配置 Master 公网地址",
+		"配置 Cloudflare Token",
+	}
+	if len(risks.Pending) != len(wantPending) {
+		t.Fatalf("expected %d pending items, got %v", len(wantPending), risks.Pending)
+	}
+	for i, want := range wantPending {
+		if risks.Pending[i] != want {
+			t.Fatalf("pending %d expected %q, got %q", i, want, risks.Pending[i])
+		}
+	}
 	wantPrefixes := []string{
-		"⚠️ Master Public API URL",
-		"⚠️ Cloudflare Token",
 		"⚠️ hk DNS 当前 IP",
 		"⚠️ hk 没有可用切换目标",
 		"⚠️ 自动切换关闭",
@@ -96,7 +106,7 @@ func TestStatusRiskPriorityOrder(t *testing.T) {
 func TestStatusRiskTruncation(t *testing.T) {
 	var nodes []NodeDiagnostic
 	for i := 0; i < 10; i++ {
-		nodes = append(nodes, NodeDiagnostic{Name: "hk-offline-" + string(rune('a'+i)), Online: false})
+		nodes = append(nodes, NodeDiagnostic{Name: "hk-offline-" + string(rune('a'+i)), Online: false, HasReported: true})
 	}
 	risks := BuildStatusRiskSummary(StatusRiskInput{
 		Setup: baseHealthyRiskSetup(),
@@ -137,9 +147,33 @@ func TestStatusRiskNodeOffline(t *testing.T) {
 	risks := BuildStatusRiskSummary(StatusRiskInput{
 		Setup:      baseHealthyRiskSetup(),
 		Cloudflare: CloudflareSummary{Verified: true},
-		Nodes:      []NodeDiagnostic{{Name: "hk-03", Online: false}},
+		Nodes:      []NodeDiagnostic{{Name: "hk-03", Online: false, HasReported: true}},
 	})
 	assertRiskContains(t, risks, "hk-03 Agent 离线")
+}
+
+func TestStatusRiskPendingTasks(t *testing.T) {
+	risks := BuildStatusRiskSummary(StatusRiskInput{
+		Setup: SetupStatus{
+			PublicAPIURL:              "https://master.example.com",
+			PublicURLConfigured:       true,
+			CloudflareTokenConfigured: true,
+			ZoneName:                  "example.com",
+			ZoneID:                    "zone-1",
+			DNSConfigCount:            0,
+			AutoSwitchEnabled:         true,
+		},
+		Nodes: []NodeDiagnostic{{Name: "hk-01", GroupName: "hk", Online: false, HasReported: false}},
+	})
+	text := FormatStatusRiskSummary(risks)
+	for _, want := range []string{"待完成：", "- 配置 DNS A 记录", "- 安装 Agent 到节点 hk-01"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected pending item %q, got %s", want, text)
+		}
+	}
+	if len(risks.Items) != 0 {
+		t.Fatalf("expected no warning items for unfinished setup, got %v", risks.Items)
+	}
 }
 
 func createSwitchFixture(t *testing.T, ctx context.Context, store *db.Store) (db.Group, db.Node, db.Node) {

@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.4")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.5")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.4")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.5")
 }
 
 func TestInstallMasterScriptSetsSecureEnvPermissions(t *testing.T) {
@@ -58,6 +58,32 @@ func TestInstallAgentScriptSetsSecureEnvPermissions(t *testing.T) {
 	assertContains(t, body, `chmod 0640 "${ETC_DIR}/agent.env"`)
 	assertContains(t, body, `User=quota-dns-router`)
 	assertContains(t, body, `Group=quota-dns-router`)
+}
+
+func TestInstallScriptsCheckDiskSpaceAndSafeGoFallback(t *testing.T) {
+	master := readScript(t, "install-master.sh")
+	agent := readScript(t, "install-agent.sh")
+	for _, body := range []string{master, agent} {
+		assertContains(t, body, `df -Pm /usr/local /tmp`)
+		assertContains(t, body, `GO_TMP="$(mktemp -d)"`)
+		assertContains(t, body, `mkdir -p "${GO_TMP}/extract"`)
+		assertContains(t, body, `tar -C "${GO_TMP}/extract" -xzf "${GO_TMP}/go.tgz"`)
+		assertContains(t, body, `mv "${GO_TMP}/extract/go" /usr/local/go`)
+		assertContains(t, body, `tail -n 50`)
+	}
+}
+
+func TestInstallAgentScriptSupportsMasterAndVersionCheck(t *testing.T) {
+	body := readScript(t, "install-agent.sh")
+	for _, want := range []string{
+		`[--master <url>] [--yes] [--dry-run] [--help] [--version]`,
+		`--yes                    兼容参数，Agent 安装默认无交互`,
+		`缺少 Master 地址。请使用 --master <url>，或直接使用 Telegram 生成的完整命令。`,
+		`"${BUILD_DIR}/${BIN_NAME}" version`,
+		`expected_version="quota-dns-router agent ${VERSION}"`,
+	} {
+		assertContains(t, body, want)
+	}
 }
 
 func TestInstallUnitsDoNotExposeTokensInExecStart(t *testing.T) {

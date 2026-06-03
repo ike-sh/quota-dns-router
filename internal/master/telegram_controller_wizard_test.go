@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ func TestCloudflarePanelShowsButtons(t *testing.T) {
 		if !rec.contains(want) {
 			t.Fatalf("expected payload to contain %q, got %v", want, rec.payloads)
 		}
+	}
+	if len(rec.messages) != 1 {
+		t.Fatalf("expected exactly one Cloudflare panel message, got %d: %v", len(rec.messages), rec.messages)
 	}
 }
 
@@ -200,8 +204,47 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 	if node.ThresholdPercent != 80 || node.ResetDay != 1 || node.TrafficMode != db.TrafficModeBoth {
 		t.Fatalf("unexpected node defaults: %+v", node)
 	}
+	for _, want := range []string{"配置 DNS", "继续生成 Agent 命令"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected next-step button %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestNodesWizardCreatesNodeWithDNSPrefersAgent(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 120, false, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []func() error{
+		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
+		func() error { return controller.handleText(ctx, 1, "hk-01") },
+		func() error { return controller.handleText(ctx, 1, "1.1.1.1") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_quota_default") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_threshold_default") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_mode:both") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_reset_day_default") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_priority_default") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
+	} {
+		if err := action(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if !rec.contains("生成 Agent 安装命令") {
 		t.Fatalf("expected next-step agent button, got %v", rec.payloads)
+	}
+	if rec.contains("继续生成 Agent 命令") {
+		t.Fatalf("did not expect DNS-first agent fallback buttons when DNS already exists: %v", rec.payloads)
 	}
 }
 
@@ -217,6 +260,23 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 	})
 	ctx := context.Background()
 	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,8 +305,59 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 	if controller.sessions[1] != "" {
 		t.Fatalf("expected pending cleared after dns save")
 	}
-	if !rec.contains("查看 DNS 状态") {
-		t.Fatalf("expected DNS status button, got %v", rec.payloads)
+	for _, want := range []string{"匹配节点：hk-01", "Agent 安装", "agent_node:" + node.ID} {
+		if !rec.contains(want) {
+			t.Fatalf("expected DNS save payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		recordErr:    errors.New("not found"),
+		anyRecordErr: errors.New("not found"),
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "1.1.1.1",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "hk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_create:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"✅ DNS A 记录已创建", "匹配节点：hk-01", "Agent 安装", "agent_node:" + node.ID} {
+		if !rec.contains(want) {
+			t.Fatalf("expected created DNS payload to contain %q, got %v", want, rec.payloads)
+		}
 	}
 }
 
@@ -274,7 +385,7 @@ func TestPolicyThresholdWizardUpdatesPolicy(t *testing.T) {
 	}
 }
 
-func TestAgentWizardGeneratesInstallCommand(t *testing.T) {
+func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()
 	if err := controller.Store.SetMasterPublicURL(ctx, "https://master.example.com"); err != nil {
@@ -310,7 +421,7 @@ func TestAgentWizardGeneratesInstallCommand(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"install-agent.sh", "--join", "30 分钟"} {
+	for _, want := range []string{"install-agent.sh", "--join", "30 分钟", "当前分组还没有 DNS A 记录", "节点：hk-01", "分组：hk", "Master：https://master.example.com"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected install command payload to contain %q, got %v", want, rec.payloads)
 		}

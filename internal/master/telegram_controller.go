@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strconv"
@@ -21,6 +22,17 @@ type TelegramController struct {
 	DNS          DNSProvider
 	sessions     map[int64]string
 	sessionMeta  map[int64]*telegramSessionMeta
+}
+
+type agentInstallPreview struct {
+	Node         db.Node
+	Group        db.Group
+	PublicURL    string
+	Command      string
+	ExpiresAt    time.Time
+	Missing      []string
+	DNSReady     bool
+	WarningLines []string
 }
 
 func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL string, pollTimeout time.Duration, dns DNSProvider) *TelegramController {
@@ -279,14 +291,7 @@ func (c *TelegramController) handleNodesCommand(ctx context.Context, chatID int6
 		if err != nil {
 			return err
 		}
-		_, _, missing, err := c.createAgentInstallCommand(ctx, created.ID, policy)
-		if err != nil {
-			return err
-		}
-		if len(missing) > 0 {
-			return c.Bot.SendMessage(ctx, chatID, "节点已创建："+created.Name+"\n\n生成 Agent 安装命令前还缺少："+strings.Join(missing, "、"), setupMenu())
-		}
-		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("✅ 节点已创建：%s\n\n下一步：", created.Name), nodeCreatedMenu(created.ID))
+		return c.sendNodeCreatedSummary(ctx, chatID, created)
 	}
 	return c.Bot.SendMessage(ctx, chatID, nodesHelp(), nil)
 }
@@ -319,11 +324,11 @@ func (c *TelegramController) handleDNSCommand(ctx context.Context, chatID int64,
 				recordID = v
 			}
 		}
-		msg, err := c.configureDNSRecord(ctx, group, parts[3], recordID, ttl, proxied)
+		msg, matchedNodeID, err := c.configureDNSRecord(ctx, group, parts[3], recordID, ttl, proxied)
 		if err != nil {
 			return c.Bot.SendMessage(ctx, chatID, err.Error(), nil)
 		}
-		return c.Bot.SendMessage(ctx, chatID, msg, dnsSavedMenu())
+		return c.Bot.SendMessage(ctx, chatID, msg, dnsSavedMenu(matchedNodeID))
 	}
 	return c.Bot.SendMessage(ctx, chatID, dnsHelp(), nil)
 }
@@ -383,15 +388,7 @@ func (c *TelegramController) handleAgentCommand(ctx context.Context, chatID int6
 		if err != nil {
 			return err
 		}
-		policy, _ := c.Store.GetPolicy(ctx)
-		command, _, missing, err := c.createAgentInstallCommand(ctx, node.ID, policy)
-		if err != nil {
-			return err
-		}
-		if len(missing) > 0 {
-			return c.Bot.SendMessage(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(missing, "、"), setupMenu())
-		}
-		return c.Bot.SendMessage(ctx, chatID, fmt.Sprintf("请在节点上执行：\n\n%s\n\njoin code 有效期：30 分钟", command), agentCommandMenu())
+		return c.sendAgentInstallCommand(ctx, chatID, node.ID)
 	}
 	return c.sendAgentPanel(ctx, chatID, c.replaceSession(chatID))
 }
@@ -523,10 +520,11 @@ func policyHelp() string {
 func setupMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "1. 配置 Master 公网地址", CallbackData: "master_url"}},
-		{{Text: "2. Cloudflare 配置", CallbackData: "cf"}, {Text: "3. DNS 配置", CallbackData: "dns"}},
-		{{Text: "4. 分组管理", CallbackData: "groups"}, {Text: "5. 节点管理", CallbackData: "nodes"}},
-		{{Text: "6. 流量策略", CallbackData: "policy"}, {Text: "7. Agent 安装", CallbackData: "agent"}},
-		{{Text: "当前状态", CallbackData: "status"}},
+		{{Text: "2. Cloudflare 配置", CallbackData: "cf"}},
+		{{Text: "3. 分组管理", CallbackData: "groups"}, {Text: "4. 节点管理", CallbackData: "nodes"}},
+		{{Text: "5. DNS 配置", CallbackData: "dns"}, {Text: "6. Agent 安装", CallbackData: "agent"}},
+		{{Text: "7. 当前状态", CallbackData: "status"}},
+		{{Text: "流量策略", CallbackData: "policy"}},
 	}}
 }
 
@@ -694,32 +692,32 @@ func (c *TelegramController) saveCloudflareConfig(ctx context.Context, chatID in
 	return c.Bot.SendMessage(ctx, chatID, "✅ Cloudflare 已保存：Token "+config.MaskSecret(token)+"，Zone "+zoneName+"，Zone ID "+zoneID, cloudflareSavedMenu())
 }
 
-func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Group, recordName, recordID string, ttl int, proxied bool) (string, error) {
+func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Group, recordName, recordID string, ttl int, proxied bool) (string, string, error) {
 	token, zoneName, zoneID, err := c.Store.GetCloudflareDefaults(ctx)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if strings.TrimSpace(token) == "" || strings.TrimSpace(zoneName) == "" {
-		return "", fmt.Errorf("请先配置 Cloudflare Token 和 Zone")
+		return "", "", fmt.Errorf("请先配置 Cloudflare Token 和 Zone")
 	}
 	if strings.TrimSpace(zoneID) == "" {
 		if c.DNS == nil {
-			return "", fmt.Errorf("当前进程未配置 Cloudflare 客户端，无法自动查询 Zone ID")
+			return "", "", fmt.Errorf("当前进程未配置 Cloudflare 客户端，无法自动查询 Zone ID")
 		}
 		zoneID, err = c.DNS.LookupZoneID(ctx, token, zoneName)
 		if err != nil {
 			_ = c.Store.SetStatusNote(ctx, noteKeyCloudflareZone, "❌ Zone 查询失败")
 			_ = c.Store.SaveLastError(ctx, errorKeyCloudflareZone, friendlyCloudflareError(err), token)
-			return "", fmt.Errorf("自动查询 Zone ID 失败：%w", err)
+			return "", "", fmt.Errorf("自动查询 Zone ID 失败：%w", err)
 		}
 		if err := c.Store.SaveCloudflareDefaults(ctx, token, zoneName, zoneID); err != nil {
-			return "", err
+			return "", "", err
 		}
 	}
 	currentIP := ""
 	if strings.TrimSpace(recordID) == "" {
 		if c.DNS == nil {
-			return "", fmt.Errorf("当前进程未配置 Cloudflare 客户端，无法自动查询 Record ID")
+			return "", "", fmt.Errorf("当前进程未配置 Cloudflare 客户端，无法自动查询 Record ID")
 		}
 		record, err := c.DNS.LookupDNSRecord(ctx, token, zoneID, recordName)
 		if err != nil {
@@ -727,12 +725,12 @@ func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Gr
 				msg := fmt.Sprintf("记录存在，但类型为 %s，不是 A 记录", any.Type)
 				_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 记录类型错误")
 				_ = c.Store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, token)
-				return "", errors.New(msg)
+				return "", "", errors.New(msg)
 			}
 			msg := "未找到 DNS A 记录，请确认记录存在"
 			_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 查询失败")
 			_ = c.Store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, token)
-			return "", errors.New(msg)
+			return "", "", errors.New(msg)
 		}
 		recordID = record.ID
 		currentIP = record.Content
@@ -740,55 +738,184 @@ func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Gr
 	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, recordID, ttl, proxied, true)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyDNSUpdate(group.ID), err.Error(), token)
-		return "", err
+		return "", "", err
 	}
 	_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "✅ DNS 记录查询成功")
 	_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(group.ID), "✅ DNS 配置已保存")
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSLookup(group.ID))
 	_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
+	matchedNodeID := ""
+	matchedNodeName := ""
 	if currentIP != "" {
 		nodes, err := c.Store.ListNodesByGroupID(ctx, group.ID)
 		if err == nil {
 			for _, node := range nodes {
 				if node.PublicIP == currentIP {
 					_ = c.Store.UpdateGroupCurrentNode(ctx, group.ID, node.ID)
+					matchedNodeID = node.ID
+					matchedNodeName = node.Name
 					break
 				}
 			}
 		}
 	}
-	msg := fmt.Sprintf("DNS 已配置：%s\nZone：%s / %s\nRecord ID：%s\n当前 A 记录 IP：%s", cfg.RecordName, cfg.ZoneName, valueOrDash(cfg.ZoneID), valueOrDash(cfg.RecordID), valueOrDash(currentIP))
-	if proxied {
-		msg += "\n提示：proxied=true 可能影响真实源 IP 判断或连通性验证。"
-	}
-	return msg, nil
+	return formatDNSSavedMessage(group.Name, cfg.RecordName, currentIP, matchedNodeName, false), matchedNodeID, nil
 }
 
 func (c *TelegramController) createAgentInstallCommand(ctx context.Context, nodeID string, policy db.Policy) (string, time.Time, []string, error) {
-	status, err := BuildSetupStatus(ctx, c.Store, c.PublicAPIURL)
+	preview, err := c.buildAgentInstallPreview(ctx, nodeID, policy)
 	if err != nil {
 		return "", time.Time{}, nil, err
+	}
+	return preview.Command, preview.ExpiresAt, preview.Missing, nil
+}
+
+func (c *TelegramController) buildAgentInstallPreview(ctx context.Context, nodeID string, policy db.Policy) (agentInstallPreview, error) {
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "节点不存在")
+		return agentInstallPreview{}, err
+	}
+	group, err := c.Store.GetGroupByID(ctx, node.GroupID)
+	if err != nil {
+		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "节点所属分组不存在")
+		return agentInstallPreview{}, err
+	}
+	status, err := BuildSetupStatus(ctx, c.Store, c.PublicAPIURL)
+	if err != nil {
+		return agentInstallPreview{}, err
+	}
+	preview := agentInstallPreview{
+		Node:  node,
+		Group: group,
 	}
 	missing := AgentInstallMissingItems(status)
 	if len(missing) > 0 {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "生成 Agent 安装命令前缺少："+strings.Join(missing, "、"))
-		return "", time.Time{}, missing, nil
+		preview.Missing = missing
+		return preview, nil
 	}
 	publicURL, err := ValidateMasterPublicURL(status.PublicAPIURL)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, err.Error())
-		return "", time.Time{}, nil, err
+		return agentInstallPreview{}, err
+	}
+	preview.PublicURL = publicURL
+	preview.DNSReady, preview.WarningLines, err = c.buildAgentInstallWarnings(ctx, group)
+	if err != nil {
+		return agentInstallPreview{}, err
 	}
 	code, expiresAt, err := c.Store.GenerateJoinCodeWithExpiry(ctx, nodeID, 30*time.Minute)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, "生成加入码失败")
-		return "", time.Time{}, nil, err
+		return agentInstallPreview{}, err
 	}
 	command, err := BuildAgentInstallCommand(publicURL, installURL(policy), code)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyAgentInstall, err.Error())
-		return "", time.Time{}, nil, err
+		return agentInstallPreview{}, err
 	}
+	preview.Command = command
+	preview.ExpiresAt = expiresAt
 	_ = c.Store.ClearLastError(ctx, errorKeyAgentInstall)
-	return command, expiresAt, nil, nil
+	return preview, nil
+}
+
+func (c *TelegramController) buildAgentInstallWarnings(ctx context.Context, group db.Group) (bool, []string, error) {
+	cfg, err := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, []string{
+				"⚠️ 当前分组还没有 DNS A 记录。",
+				"Agent 可以先安装，但 DNS 自动切换不会生效。",
+				"建议先完成 DNS 配置。",
+			}, nil
+		}
+		return false, nil, err
+	}
+	if strings.TrimSpace(cfg.RecordName) == "" {
+		return false, []string{
+			"⚠️ 当前分组还没有 DNS A 记录。",
+			"Agent 可以先安装，但 DNS 自动切换不会生效。",
+			"建议先完成 DNS 配置。",
+		}, nil
+	}
+	if c.DNS == nil || strings.TrimSpace(cfg.ZoneID) == "" || strings.TrimSpace(cfg.APIToken) == "" {
+		return true, nil, nil
+	}
+	record, err := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+	if err != nil {
+		return true, nil, nil
+	}
+	nodes, err := c.Store.ListNodesByGroupID(ctx, group.ID)
+	if err != nil {
+		return true, nil, err
+	}
+	for _, node := range nodes {
+		if node.PublicIP == record.Content {
+			return true, nil, nil
+		}
+	}
+	return true, []string{
+		fmt.Sprintf("⚠️ 当前 DNS %s 解析到 %s，但没有匹配任何已配置节点。", cfg.RecordName, record.Content),
+		"自动切换前建议先把 DNS 指向某个已配置节点。",
+	}, nil
+}
+
+func formatAgentInstallMessage(preview agentInstallPreview) string {
+	var b strings.Builder
+	b.WriteString("🤖 Agent 安装命令\n\n")
+	b.WriteString("节点：" + preview.Node.Name + "\n")
+	b.WriteString("分组：" + preview.Group.Name + "\n")
+	b.WriteString("Master：" + preview.PublicURL + "\n")
+	if len(preview.WarningLines) > 0 {
+		b.WriteString("\n")
+		for _, line := range preview.WarningLines {
+			b.WriteString(line + "\n")
+		}
+	}
+	b.WriteString("\n请在节点 " + preview.Node.Name + " 上执行：\n\n")
+	b.WriteString(preview.Command + "\n\n")
+	b.WriteString("join code 有效期：30 分钟")
+	if !preview.ExpiresAt.IsZero() {
+		b.WriteString("（到 " + preview.ExpiresAt.Local().Format("2006-01-02 15:04:05") + "）")
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func formatDNSSavedMessage(groupName, recordName, currentIP, matchedNodeName string, created bool) string {
+	title := "✅ DNS A 记录已保存"
+	if created {
+		title = "✅ DNS A 记录已创建"
+	}
+	var b strings.Builder
+	b.WriteString(title + "\n\n")
+	b.WriteString("分组：" + groupName + "\n")
+	b.WriteString("域名：" + valueOrDash(recordName) + "\n")
+	b.WriteString("当前 IP：" + valueOrDash(currentIP) + "\n")
+	b.WriteString("匹配节点：" + valueOrDash(matchedNodeName) + "\n\n")
+	b.WriteString("下一步：生成 Agent 安装命令")
+	return b.String()
+}
+
+func (c *TelegramController) sendNodeCreatedSummary(ctx context.Context, chatID int64, node db.Node) error {
+	hasDNS, err := c.groupHasDNSConfig(ctx, node.GroupID)
+	if err != nil {
+		return err
+	}
+	if !hasDNS {
+		return c.Bot.SendMessage(ctx, chatID, "✅ 节点已创建："+node.Name+"\n\n下一步：当前分组还没有绑定 DNS A 记录，请先配置 DNS。", nodeCreatedMenu(node.ID, false))
+	}
+	return c.Bot.SendMessage(ctx, chatID, "✅ 节点已创建："+node.Name+"\n\n下一步：生成 Agent 安装命令。", nodeCreatedMenu(node.ID, true))
+}
+
+func (c *TelegramController) groupHasDNSConfig(ctx context.Context, groupID string) (bool, error) {
+	cfg, err := c.Store.GetCloudflareConfigByGroupID(ctx, groupID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.TrimSpace(cfg.RecordName) != "", nil
 }

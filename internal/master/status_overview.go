@@ -63,8 +63,9 @@ type StatusRiskInput struct {
 }
 
 type StatusRiskSummary struct {
-	Items  []string
-	Hidden int
+	Pending []string
+	Items   []string
+	Hidden  int
 }
 
 func BuildStatusOverview(ctx context.Context, store *db.Store, fallbackPublicURL string, dns DNSProvider, now time.Time) (StatusOverview, error) {
@@ -202,7 +203,9 @@ func BuildLatestFailureSummary(ctx context.Context, store *db.Store) (StatusFail
 
 func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 	var items []statusRiskItem
+	var pending []string
 	seen := make(map[string]bool)
+	pendingSeen := make(map[string]bool)
 	add := func(priority int, message string) {
 		message = strings.TrimSpace(message)
 		if message == "" || seen[message] {
@@ -211,18 +214,29 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 		seen[message] = true
 		items = append(items, statusRiskItem{priority: priority, message: message})
 	}
+	addPending := func(message string) {
+		message = strings.TrimSpace(message)
+		if message == "" || pendingSeen[message] {
+			return
+		}
+		pendingSeen[message] = true
+		pending = append(pending, message)
+	}
 
 	if MasterPublicURLWarning(input.Setup.PublicAPIURL) != "" || input.Setup.PublicURLWarning != "" {
-		add(1, "⚠️ Master Public API URL 仍是本机地址")
+		addPending("配置 Master 公网地址")
 	}
 	if !input.Setup.CloudflareTokenConfigured {
-		add(2, "⚠️ Cloudflare Token 未配置")
+		addPending("配置 Cloudflare Token")
+	}
+	if input.Setup.CloudflareTokenConfigured && (strings.TrimSpace(input.Setup.ZoneName) == "" || strings.TrimSpace(input.Setup.ZoneID) == "") {
+		addPending("配置 Cloudflare Zone")
 	}
 	if input.Setup.CloudflareTokenConfigured && zoneNeedsVerification(input.Setup, input.Cloudflare) {
 		add(2, "⚠️ Zone 未验证")
 	}
 	if input.Setup.DNSConfigCount == 0 {
-		add(2, "⚠️ 没有 DNS A 记录")
+		addPending("配置 DNS A 记录")
 	}
 	if !isBlankOrDash(input.Cloudflare.LastError) {
 		add(2, "⚠️ Cloudflare 配置错误："+sanitizeStatusMessage(input.Cloudflare.LastError))
@@ -235,8 +249,14 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 			add(3, fmt.Sprintf("⚠️ %s DNS 当前 IP %s 不匹配任何节点", valueOrDash(item.GroupName), item.CurrentIP))
 		}
 	}
+	groupHasReported := make(map[string]bool, len(input.Nodes))
+	for _, node := range input.Nodes {
+		if node.HasReported {
+			groupHasReported[node.GroupName] = true
+		}
+	}
 	for _, group := range input.Groups {
-		if group.NodeCount > 0 && group.AvailableTargetCount == 0 {
+		if group.NodeCount > 0 && group.AvailableTargetCount == 0 && input.Setup.DNSConfigCount > 0 && groupHasReported[group.Name] {
 			add(4, fmt.Sprintf("⚠️ %s 没有可用切换目标", valueOrDash(group.Name)))
 		}
 	}
@@ -249,6 +269,10 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 		}
 	}
 	for _, node := range input.Nodes {
+		if !node.HasReported {
+			addPending(fmt.Sprintf("安装 Agent 到节点 %s", valueOrDash(node.Name)))
+			continue
+		}
 		if !node.Online {
 			add(7, fmt.Sprintf("⚠️ %s Agent 离线", valueOrDash(node.Name)))
 		}
@@ -269,7 +293,10 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 	if len(items) < limit {
 		limit = len(items)
 	}
-	out := StatusRiskSummary{Items: make([]string, 0, limit)}
+	out := StatusRiskSummary{
+		Pending: append([]string{}, pending...),
+		Items:   make([]string, 0, limit),
+	}
 	for _, item := range items[:limit] {
 		out.Items = append(out.Items, item.message)
 	}
@@ -310,10 +337,22 @@ func FormatRecentFailureSummary(summary StatusFailureSummary) string {
 }
 
 func FormatStatusRiskSummary(summary StatusRiskSummary) string {
-	if len(summary.Items) == 0 {
+	if len(summary.Pending) == 0 && len(summary.Items) == 0 {
 		return "无"
 	}
-	lines := append([]string{}, summary.Items...)
+	var lines []string
+	if len(summary.Pending) > 0 {
+		lines = append(lines, "待完成：")
+		for _, item := range summary.Pending {
+			lines = append(lines, "- "+item)
+		}
+	}
+	if len(summary.Items) > 0 {
+		if len(lines) > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, summary.Items...)
+	}
 	if summary.Hidden > 0 {
 		lines = append(lines, fmt.Sprintf("⚠️ 还有 %d 条风险未显示", summary.Hidden))
 	}
