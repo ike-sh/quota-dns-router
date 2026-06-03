@@ -2,7 +2,7 @@
 
 `quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
 
-当前版本：`0.1.0-alpha.2`
+当前版本：`0.1.0-alpha.3`
 
 本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。
 
@@ -60,6 +60,35 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main
 http://1.2.3.4:8080
 https://domain.example.com
 ```
+
+## 配置 Master 公网地址
+
+推荐方式：
+
+```text
+点击 Telegram 里的“配置 Master 公网地址”
+然后点击“使用当前公网地址”
+```
+
+也可以手动发送：
+
+```text
+/config_master_url http://服务器公网IP:8080
+```
+
+如果直接输入服务器公网 IP：
+
+```text
+服务器公网IP
+```
+
+系统会自动补全为：
+
+```text
+http://服务器公网IP:8080
+```
+
+如果 Master 前面有反代或 HTTPS 域名，应配置 `https://domain.example.com`。如果服务器安全组没有放行 8080，Agent 无法连接。`127.0.0.1` 只适合本机调试，不适合 Agent 部署。
 
 ## Telegram 初始化流程
 

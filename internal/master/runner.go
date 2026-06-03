@@ -39,6 +39,11 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 		_ = store.Close()
 		return nil, err
 	}
+	if cfg.SuggestedPublicAPIURL != "" {
+		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, cfg.SuggestedPublicAPIURL)
+	} else if suggested := SuggestedPublicAPIURLFromIP(cfg.DetectedPublicIP); suggested != "" {
+		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, suggested)
+	}
 	bot := telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminID, nil)
 	return &Runtime{
 		Config: cfg,

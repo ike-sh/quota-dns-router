@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.1.0-alpha.3
+
+- 修复 Telegram `/config_master_url` 等待输入状态在错误输入后丢失的问题。
+- `/config_master_url <url>` 支持命令参数直传，错误后保持 pending 状态并允许重试。
+- Master 公网地址支持公网 IP 自动补全为 `http://IP:8080`，并默认拒绝本机地址。
+- Master 安装脚本尝试检测公网 IPv4，并写入 `QDR_SUGGESTED_PUBLIC_API_URL`。
+- Telegram 配置 Master 公网地址时支持“一键使用当前公网地址”按钮。
+
 ## 0.1.0-alpha.2
 
 - 修复 Master / Agent systemd 运行用户读取 env 文件和写入数据目录的权限问题。

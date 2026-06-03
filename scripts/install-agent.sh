@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.2"
+VERSION="0.1.0-alpha.3"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"

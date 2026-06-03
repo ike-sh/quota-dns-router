@@ -9,18 +9,20 @@ import (
 const DefaultMasterEnvPath = "/etc/quota-dns-router/master.env"
 
 type MasterConfig struct {
-	EnvPath             string
-	ListenAddr          string
-	PublicAPIURL        string
-	DBPath              string
-	DataDir             string
-	LogDir              string
-	TelegramToken       string
-	TelegramAdminID     int64
-	TelegramPollTimeout time.Duration
-	CheckInterval       time.Duration
-	AgentOfflineAfter   time.Duration
-	OfflineNotifyAfter  time.Duration
+	EnvPath               string
+	ListenAddr            string
+	PublicAPIURL          string
+	DBPath                string
+	DataDir               string
+	LogDir                string
+	TelegramToken         string
+	TelegramAdminID       int64
+	TelegramPollTimeout   time.Duration
+	CheckInterval         time.Duration
+	AgentOfflineAfter     time.Duration
+	OfflineNotifyAfter    time.Duration
+	DetectedPublicIP      string
+	SuggestedPublicAPIURL string
 }
 
 func LoadMaster(path string) (MasterConfig, error) {
@@ -56,18 +58,20 @@ func LoadMaster(path string) (MasterConfig, error) {
 	}
 
 	cfg := MasterConfig{
-		EnvPath:             path,
-		ListenAddr:          getString(values, "QDR_MASTER_LISTEN_ADDR", ":8080"),
-		PublicAPIURL:        getString(values, "QDR_MASTER_PUBLIC_API_URL", "http://127.0.0.1:8080"),
-		DBPath:              getString(values, "QDR_MASTER_DB_PATH", "/var/lib/quota-dns-router/master.db"),
-		DataDir:             getString(values, "QDR_MASTER_DATA_DIR", "/var/lib/quota-dns-router"),
-		LogDir:              getString(values, "QDR_MASTER_LOG_DIR", "/var/log/quota-dns-router"),
-		TelegramToken:       getString(values, "QDR_TELEGRAM_TOKEN", ""),
-		TelegramAdminID:     adminID,
-		TelegramPollTimeout: pollTimeout,
-		CheckInterval:       checkInterval,
-		AgentOfflineAfter:   offlineAfter,
-		OfflineNotifyAfter:  offlineNotifyAfter,
+		EnvPath:               path,
+		ListenAddr:            getString(values, "QDR_MASTER_LISTEN_ADDR", ":8080"),
+		PublicAPIURL:          getString(values, "QDR_MASTER_PUBLIC_API_URL", "http://127.0.0.1:8080"),
+		DBPath:                getString(values, "QDR_MASTER_DB_PATH", "/var/lib/quota-dns-router/master.db"),
+		DataDir:               getString(values, "QDR_MASTER_DATA_DIR", "/var/lib/quota-dns-router"),
+		LogDir:                getString(values, "QDR_MASTER_LOG_DIR", "/var/log/quota-dns-router"),
+		TelegramToken:         getString(values, "QDR_TELEGRAM_TOKEN", ""),
+		TelegramAdminID:       adminID,
+		TelegramPollTimeout:   pollTimeout,
+		CheckInterval:         checkInterval,
+		AgentOfflineAfter:     offlineAfter,
+		OfflineNotifyAfter:    offlineNotifyAfter,
+		DetectedPublicIP:      getString(values, "QDR_DETECTED_PUBLIC_IP", ""),
+		SuggestedPublicAPIURL: getString(values, "QDR_SUGGESTED_PUBLIC_API_URL", ""),
 	}
 	if cfg.TelegramToken == "" {
 		return MasterConfig{}, fmt.Errorf("缺少 QDR_TELEGRAM_TOKEN")

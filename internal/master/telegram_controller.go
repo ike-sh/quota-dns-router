@@ -33,6 +33,19 @@ func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL stri
 	}
 }
 
+func (c *TelegramController) setSession(chatID int64, state string) {
+	if c.sessions == nil {
+		c.sessions = make(map[int64]string)
+	}
+	c.sessions[chatID] = state
+}
+
+func (c *TelegramController) clearSession(chatID int64) {
+	if c.sessions != nil {
+		delete(c.sessions, chatID)
+	}
+}
+
 func (c *TelegramController) Run(ctx context.Context) error {
 	offset := 0
 	for {
@@ -80,8 +93,10 @@ func (c *TelegramController) handleCallback(ctx context.Context, chatID int64, d
 	case "status":
 		return c.sendStatus(ctx, chatID)
 	case "master_url":
-		c.sessions[chatID] = "master_url"
-		return c.Bot.SendMessage(ctx, chatID, masterURLHelp(), nil)
+		c.setSession(chatID, "master_url")
+		return c.sendMasterURLPrompt(ctx, chatID)
+	case "use_suggested_master_url":
+		return c.saveSuggestedMasterPublicURL(ctx, chatID)
 	case "cf":
 		return c.sendCloudflareSummary(ctx, chatID)
 	case "dns":
@@ -104,8 +119,11 @@ func (c *TelegramController) handleCallback(ctx context.Context, chatID int64, d
 }
 
 func (c *TelegramController) handleText(ctx context.Context, chatID int64, text string) error {
+	if text == "/cancel" {
+		c.clearSession(chatID)
+		return c.Bot.SendMessage(ctx, chatID, "已取消当前配置。", nil)
+	}
 	if state := c.sessions[chatID]; state != "" && !strings.HasPrefix(text, "/") {
-		delete(c.sessions, chatID)
 		return c.handleSession(ctx, chatID, state, text)
 	}
 	if text == "" {
@@ -125,10 +143,11 @@ func (c *TelegramController) handleText(ctx context.Context, chatID int64, text 
 		return c.sendSetup(ctx, chatID)
 	case "/config_master_url":
 		if len(parts) >= 2 {
+			c.setSession(chatID, "master_url")
 			return c.saveMasterPublicURL(ctx, chatID, parts[1])
 		}
-		c.sessions[chatID] = "master_url"
-		return c.Bot.SendMessage(ctx, chatID, masterURLHelp(), nil)
+		c.setSession(chatID, "master_url")
+		return c.sendMasterURLPrompt(ctx, chatID)
 	case "/cf":
 		if len(parts) >= 3 {
 			zoneID := ""
@@ -505,9 +524,6 @@ func cfHelp() string {
 	return "Cloudflare：发送 /cf <Token> <Zone Name> [Zone ID]。\n如果不提供 Zone ID，程序会自动查询。"
 }
 func agentHelp() string { return "Agent 安装：/agent install <节点名>" }
-func masterURLHelp() string {
-	return "请发送 Master 公网地址，例如：\nhttp://1.2.3.4:8080\nhttps://domain.example.com\n\n只支持 http/https，不能包含 path/query/fragment。"
-}
 func policyHelp() string {
 	return "策略命令：/policy set threshold=80 quota=1000GB reset_day=1 mode=both offline=300 auto_switch=true notify_only=false repo=<install-agent-url>"
 }
@@ -578,21 +594,80 @@ func valueOrDash(v string) string {
 	return v
 }
 
+const settingSuggestedPublicAPIURL = "suggested_public_api_url"
+
 func masterURLButton() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "配置 Master 公网地址", CallbackData: "master_url"}},
 	}}
 }
 
-func (c *TelegramController) saveMasterPublicURL(ctx context.Context, chatID int64, raw string) error {
-	value, err := ValidateMasterPublicURL(raw)
+func (c *TelegramController) sendMasterURLPrompt(ctx context.Context, chatID int64) error {
+	suggested := c.ensureSuggestedMasterPublicURL(ctx)
+	return c.Bot.SendMessage(ctx, chatID, masterURLHelp(suggested), masterURLPromptMenu(suggested))
+}
+
+func (c *TelegramController) ensureSuggestedMasterPublicURL(ctx context.Context) string {
+	if c.Store != nil {
+		if value, err := c.Store.GetSetting(ctx, settingSuggestedPublicAPIURL); err == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	detectCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	ip, err := DetectPublicIPv4(detectCtx)
 	if err != nil {
-		return c.Bot.SendMessage(ctx, chatID, err.Error()+"\n\n"+masterURLHelp(), nil)
+		return ""
+	}
+	suggested := SuggestedPublicAPIURLFromIP(ip)
+	if suggested != "" && c.Store != nil {
+		_ = c.Store.SetSetting(ctx, settingSuggestedPublicAPIURL, suggested)
+	}
+	return suggested
+}
+
+func masterURLHelp(suggested string) string {
+	base := "请发送 Master 公网地址，例如：\nhttp://1.2.3.4:8080\nhttps://domain.example.com"
+	if strings.TrimSpace(suggested) == "" {
+		return base + "\n\n也可以直接发送服务器公网 IP，系统会自动补全为 http://公网IP:8080。\n发送 /cancel 取消。"
+	}
+	return base + "\n\n检测到当前服务器公网地址：\n\n" + suggested + "\n\n你可以直接点击按钮使用，也可以手动发送其他地址。\n发送 /cancel 取消。"
+}
+
+func masterURLPromptMenu(suggested string) *telegram.ReplyMarkup {
+	if strings.TrimSpace(suggested) == "" {
+		return nil
+	}
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "使用当前公网地址", CallbackData: "use_suggested_master_url"}},
+	}}
+}
+
+func (c *TelegramController) saveSuggestedMasterPublicURL(ctx context.Context, chatID int64) error {
+	suggested := c.ensureSuggestedMasterPublicURL(ctx)
+	if strings.TrimSpace(suggested) == "" {
+		c.setSession(chatID, "master_url")
+		return c.Bot.SendMessage(ctx, chatID, "未能自动检测公网 IP，请手动发送 Master 公网地址，或发送 /cancel 取消。", nil)
+	}
+	c.setSession(chatID, "master_url")
+	return c.saveMasterPublicURL(ctx, chatID, suggested)
+}
+
+func (c *TelegramController) saveMasterPublicURL(ctx context.Context, chatID int64, raw string) error {
+	value, normalized, err := NormalizeMasterPublicURLInput(raw)
+	if err != nil {
+		c.setSession(chatID, "master_url")
+		return c.Bot.SendMessage(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送 Master 公网地址，或发送 /cancel 取消。", nil)
 	}
 	if err := c.Store.SetMasterPublicURL(ctx, value); err != nil {
 		return err
 	}
-	return c.Bot.SendMessage(ctx, chatID, "Master 公网地址已保存："+value, nil)
+	c.clearSession(chatID)
+	msg := "✅ Master 公网地址已保存：\n" + value + "\n\n下一步：配置 Cloudflare：/cf"
+	if normalized {
+		msg = "检测到你输入的地址未带协议或端口，已自动补全为：\n" + value + "\n\n" + msg
+	}
+	return c.Bot.SendMessage(ctx, chatID, msg, nil)
 }
 
 func (c *TelegramController) saveCloudflareConfig(ctx context.Context, chatID int64, token, zoneName, zoneID string) error {

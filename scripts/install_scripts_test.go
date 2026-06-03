@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.2")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.3")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.2")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.3")
 }
 
 func TestInstallMasterScriptSetsSecureEnvPermissions(t *testing.T) {
@@ -41,6 +41,13 @@ func TestInstallMasterScriptSetsSecureEnvPermissions(t *testing.T) {
 	assertContains(t, body, `chmod 0640 "${ETC_DIR}/master.env"`)
 	assertContains(t, body, `chown quota-dns-router:quota-dns-router "${DATA_DIR}/master.db"`)
 	assertContains(t, body, `chmod 600 "${DATA_DIR}/master.db"`)
+}
+
+func TestInstallMasterDryRunWritesSuggestedPublicURL(t *testing.T) {
+	out := runBash(t, "QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
+	assertContains(t, out, "检测公网 IPv4")
+	assertContains(t, out, "http://203.0.113.10:8080")
+	assertContains(t, out, "QDR_SUGGESTED_PUBLIC_API_URL")
 }
 
 func TestInstallAgentScriptSetsSecureEnvPermissions(t *testing.T) {
@@ -105,6 +112,22 @@ func runScript(t *testing.T, name string, args ...string) string {
 	}
 	cmdArgs := append([]string{name}, args...)
 	cmd := exec.Command("bash", cmdArgs...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\n%s", err, string(out))
+	}
+	return string(out)
+}
+
+func runBash(t *testing.T, command string) string {
+	t.Helper()
+	if _, err := exec.LookPath("bash"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) {
+			t.Skip("bash not found")
+		}
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", "-lc", command)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("script failed: %v\n%s", err, string(out))

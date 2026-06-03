@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.2"
+VERSION="0.1.0-alpha.3"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -18,6 +18,8 @@ STAGE="初始化"
 WORK_DIR=""
 SRC_DIR=""
 BUILD_DIR=""
+DETECTED_PUBLIC_IP=""
+SUGGESTED_PUBLIC_API_URL=""
 
 usage() {
   cat <<'EOF'
@@ -214,6 +216,28 @@ build_master() {
   install -m 0755 "${BUILD_DIR}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
 }
 
+detect_public_ip() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    DETECTED_PUBLIC_IP="${QDR_DETECTED_PUBLIC_IP:-203.0.113.10}"
+    SUGGESTED_PUBLIC_API_URL="http://${DETECTED_PUBLIC_IP}:8080"
+    echo "[dry-run] 检测公网 IPv4：${DETECTED_PUBLIC_IP}"
+    return
+  fi
+  for endpoint in \
+    "https://api.ipify.org" \
+    "https://ifconfig.me/ip" \
+    "https://icanhazip.com"; do
+    ip="$(curl -4fsS --max-time 3 "$endpoint" 2>/dev/null | tr -d '\r\n[:space:]' || true)"
+    if printf '%s' "$ip" | grep -Eq '^[0-9]{1,3}(\.[0-9]{1,3}){3}$'; then
+      DETECTED_PUBLIC_IP="$ip"
+      SUGGESTED_PUBLIC_API_URL="http://${ip}:8080"
+      return
+    fi
+  done
+  DETECTED_PUBLIC_IP=""
+  SUGGESTED_PUBLIC_API_URL=""
+}
+
 ensure_user() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] 确保系统用户 quota-dns-router 存在"
@@ -237,6 +261,8 @@ write_config() {
     echo "[dry-run] install -d -m 750 -o root -g quota-dns-router ${ETC_DIR}"
     echo "[dry-run] install -d -m 750 -o quota-dns-router -g quota-dns-router ${DATA_DIR} ${LOG_DIR}"
     echo "[dry-run] 写入 ${ETC_DIR}/master.env（Token 已隐藏），权限 root:quota-dns-router 640"
+    echo "[dry-run] QDR_DETECTED_PUBLIC_IP=${DETECTED_PUBLIC_IP}"
+    echo "[dry-run] QDR_SUGGESTED_PUBLIC_API_URL=${SUGGESTED_PUBLIC_API_URL}"
     return
   fi
   install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"
@@ -255,6 +281,8 @@ QDR_MASTER_PUBLIC_API_URL=http://127.0.0.1:8080
 QDR_MASTER_DB_PATH=${DATA_DIR}/master.db
 QDR_MASTER_DATA_DIR=${DATA_DIR}
 QDR_MASTER_LOG_DIR=${LOG_DIR}
+QDR_DETECTED_PUBLIC_IP=${DETECTED_PUBLIC_IP}
+QDR_SUGGESTED_PUBLIC_API_URL=${SUGGESTED_PUBLIC_API_URL}
 QDR_TELEGRAM_POLL_TIMEOUT=20s
 QDR_CHECK_INTERVAL=60s
 QDR_AGENT_OFFLINE_AFTER=300s
@@ -352,6 +380,7 @@ step "[5/8] 构建 qdr-master"
 build_master
 
 step "[6/8] 写入配置和 systemd"
+detect_public_ip
 ensure_user
 prepare_existing_service
 write_config
@@ -363,6 +392,14 @@ step "[8/8] 安装完成"
 check_service
 echo "Master 已安装并启动。"
 echo "下一步：在 Telegram 向 Bot 发送 /start，然后配置 Master 公网地址、Cloudflare、DNS、节点和 Agent。"
+if [ -n "$SUGGESTED_PUBLIC_API_URL" ]; then
+  echo "检测到公网地址建议："
+  echo "$SUGGESTED_PUBLIC_API_URL"
+  echo "请在 Telegram 点击“配置 Master 公网地址”，然后选择“使用当前公网地址”。"
+else
+  echo "未能自动检测公网 IP，请在 Telegram 手动配置："
+  echo "/config_master_url http://你的服务器公网IP:8080"
+fi
 echo "建议检查：systemctl status quota-dns-router-master --no-pager -l"
 echo "查看日志：journalctl -u quota-dns-router-master -n 100 --no-pager"
 echo "CLI 诊断：qdr-master status"
