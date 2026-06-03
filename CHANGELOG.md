@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.1.0-alpha.7
+
+- 修复 `.github/workflows/release.yml` 中 `Build release archives` 步骤的 shell 语法错误，移除 YAML `run` 块里的 heredoc，改用 `printf` 生成 `README.txt`。
+- Release 工作流暂时收敛为仅构建 `linux/amd64`，发布 `qdr-master_linux_amd64.tar.gz`、`qdr-agent_linux_amd64.tar.gz` 和 `SHA256SUMS`。
+- 安装脚本默认二进制下载 tag 升级到 `v0.1.0-alpha.7`，并固定下载 `linux_amd64` release 包。
+- 版本升级到 `0.1.0-alpha.7`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+
 ## 0.1.0-alpha.6
 
 - 安装器默认切换到 `QDR_INSTALL_MODE=binary`，优先从 GitHub Releases 下载预编译 `qdr-master` / `qdr-agent`，安装后强制做版本校验。

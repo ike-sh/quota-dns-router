@@ -9,12 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
 
     steps:
       - uses: actions/checkout@v4
@@ -28,48 +24,35 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+
           for bin in qdr-master qdr-agent; do
             out_dir="$(mktemp -d)"
-            if [ "${bin}" = "qdr-master" ]; then
+            if [ "$bin" = "qdr-master" ]; then
               pkg="./cmd/qdr-master"
             else
               pkg="./cmd/qdr-agent"
             fi
-            CGO_ENABLED=0 GOOS=linux GOARCH="${{ matrix.arch }}" \
-              go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
-            cat > "${out_dir}/README.txt" <<EOF
-            ${bin} ${GITHUB_REF_NAME}
 
-            Extract the archive and install the binary to /usr/local/bin.
-            EOF
-            tar -C "${out_dir}" -czf "dist/${bin}_linux_${{ matrix.arch }}.tar.gz" "${bin}" README.txt
+            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
+
+            "${out_dir}/${bin}" version
+
+            printf '%s\n' \
+              "${bin} ${GITHUB_REF_NAME}" \
+              "" \
+              "Extract the archive and install the binary to /usr/local/bin." \
+              > "${out_dir}/README.txt"
+
+            tar -C "${out_dir}" -czf "dist/${bin}_linux_amd64.tar.gz" "${bin}" README.txt
+            rm -rf "${out_dir}"
           done
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-${{ matrix.arch }}
-          path: dist/*.tar.gz
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          pattern: release-*
-          merge-multiple: true
-
-      - name: Generate checksums
-        shell: bash
-        run: |
-          set -euo pipefail
           cd dist
-          sha256sum *.tar.gz > SHA256SUMS
+          sha256sum qdr-master_linux_amd64.tar.gz qdr-agent_linux_amd64.tar.gz > SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/*.tar.gz
+            dist/qdr-master_linux_amd64.tar.gz
+            dist/qdr-agent_linux_amd64.tar.gz
             dist/SHA256SUMS

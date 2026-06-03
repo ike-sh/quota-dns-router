@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.6"
+VERSION="0.1.0-alpha.7"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -510,9 +510,13 @@ install_agent_from_release() {
   local arch repo_no_git release_base package_name package_url sums_url expected
 
   arch="$(detect_linux_arch)"
+  if [ "$arch" != "amd64" ]; then
+    echo "binary release currently supports linux/amd64 only; detected ${arch}. Please set QDR_INSTALL_MODE=source." >&2
+    return 1
+  fi
   repo_no_git="${REPO%.git}"
   release_base="${repo_no_git}/releases/download/v${VERSION}"
-  package_name="${BIN_NAME}_linux_${arch}.tar.gz"
+  package_name="${BIN_NAME}_linux_amd64.tar.gz"
   package_url="${release_base}/${package_name}"
   sums_url="${release_base}/SHA256SUMS"
   expected="quota-dns-router agent ${VERSION}"

@@ -2,7 +2,7 @@
 
 `quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
 
-当前版本：`0.1.0-alpha.6`
+当前版本：`0.1.0-alpha.7`
 
 本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。
 
