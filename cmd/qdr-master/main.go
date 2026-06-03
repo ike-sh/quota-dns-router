@@ -26,22 +26,30 @@ func run(args []string) error {
 	if len(args) > 0 {
 		cmd = args[0]
 	}
-	envPath := flagValue(args[1:], "--env", config.DefaultMasterEnvPath)
+	cfgPath, cfgPathProvided := configFlag(args[1:], config.DefaultMasterEnvPath)
 	switch cmd {
 	case "run":
-		cfg, err := config.LoadMaster(envPath)
+		loadPath := ""
+		if cfgPathProvided {
+			loadPath = cfgPath
+		}
+		cfg, err := config.LoadMaster(loadPath)
 		if err != nil {
 			return err
 		}
 		return master.Run(context.Background(), cfg)
 	case "telegram-run":
-		cfg, err := config.LoadMaster(envPath)
+		loadPath := ""
+		if cfgPathProvided {
+			loadPath = cfgPath
+		}
+		cfg, err := config.LoadMaster(loadPath)
 		if err != nil {
 			return err
 		}
 		return master.TelegramRun(context.Background(), cfg)
 	case "migrate":
-		cfg, err := config.LoadMaster(envPath)
+		cfg, err := config.LoadMaster(cfgPath)
 		if err != nil {
 			return err
 		}
@@ -52,7 +60,7 @@ func run(args []string) error {
 		defer store.Close()
 		fmt.Println("migration 完成")
 	case "status":
-		cfg, err := config.LoadMaster(envPath)
+		cfg, err := config.LoadMaster(cfgPath)
 		if err != nil {
 			return err
 		}
@@ -67,7 +75,7 @@ func run(args []string) error {
 		}
 		fmt.Print(master.FormatStatusReport(overview.Setup, overview.Summary, overview.ReportExtras()))
 	case "config-check":
-		cfg, err := config.LoadMaster(envPath)
+		cfg, err := config.LoadMaster(cfgPath)
 		if err != nil {
 			return err
 		}
@@ -81,6 +89,16 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Print(formatMasterConfigCheck(cfg, overview))
+	case "telegram-status":
+		cfg, err := config.LoadMaster(cfgPath)
+		if err != nil {
+			return err
+		}
+		status, err := master.BuildTelegramStatus(context.Background(), cfg)
+		if err != nil {
+			return err
+		}
+		fmt.Print(master.FormatTelegramStatus(status))
 	case "version":
 		fmt.Println(version.MasterString())
 	default:
@@ -91,12 +109,22 @@ func run(args []string) error {
 
 func printHelp() {
 	fmt.Println(`qdr-master commands:
-  run [--env path]
-  telegram-run [--env path]
-  status [--env path]
-  config-check [--env path]
-  migrate [--env path]
+  run [--config path]
+  telegram-run [--config path]
+  status [--config path]
+  config-check [--config path]
+  telegram-status [--config path]
+  migrate [--config path]
   version`)
+}
+
+func configFlag(args []string, fallback string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--config" || args[i] == "--env") && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return fallback, false
 }
 
 func flagValue(args []string, name, fallback string) string {

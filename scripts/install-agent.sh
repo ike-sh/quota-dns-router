@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.1"
+VERSION="0.1.0-alpha.2"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -231,13 +231,48 @@ build_agent() {
   install -m 0755 "${BUILD_DIR}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
 }
 
+ensure_user() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] 确保系统用户 quota-dns-router 存在"
+    return
+  fi
+  if ! id quota-dns-router >/dev/null 2>&1; then
+    useradd --system --home "$DATA_DIR" --shell /usr/sbin/nologin quota-dns-router
+  fi
+}
+
+prepare_existing_service() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl stop quota-dns-router-agent.service 2>/dev/null || true"
+    return
+  fi
+  systemctl stop quota-dns-router-agent.service 2>/dev/null || true
+}
+
+prepare_dirs() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] install -d -m 750 -o root -g quota-dns-router ${ETC_DIR}"
+    echo "[dry-run] install -d -m 750 -o quota-dns-router -g quota-dns-router ${DATA_DIR} ${LOG_DIR}"
+    return
+  fi
+  install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"
+  install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"
+  chown -R quota-dns-router:quota-dns-router "$DATA_DIR" "$LOG_DIR"
+  chmod 750 "$DATA_DIR" "$LOG_DIR"
+  if [ -f "${DATA_DIR}/agent-state.json" ]; then
+    chown quota-dns-router:quota-dns-router "${DATA_DIR}/agent-state.json"
+    chmod 600 "${DATA_DIR}/agent-state.json"
+  fi
+}
+
 join_master() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL} --env ${ETC_DIR}/agent.env"
     return
   fi
-  mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
   "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" --env "${ETC_DIR}/agent.env"
+  chown root:quota-dns-router "${ETC_DIR}/agent.env"
+  chmod 0640 "${ETC_DIR}/agent.env"
 }
 
 write_service() {
@@ -253,6 +288,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=quota-dns-router
+Group=quota-dns-router
 EnvironmentFile=/etc/quota-dns-router/agent.env
 ExecStart=/usr/local/bin/qdr-agent run
 Restart=always
@@ -270,7 +307,28 @@ EOF
 
 start_service() {
   run systemctl daemon-reload
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl reset-failed quota-dns-router-agent.service 2>/dev/null || true"
+  else
+    systemctl reset-failed quota-dns-router-agent.service 2>/dev/null || true
+  fi
   run systemctl enable --now quota-dns-router-agent.service
+}
+
+check_service() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl is-active --quiet quota-dns-router-agent.service"
+    echo "[dry-run] 如失败，打印 systemctl status 和 journalctl 排查命令"
+    return
+  fi
+  if ! systemctl is-active --quiet quota-dns-router-agent.service; then
+    echo "Agent 服务未成功启动，请查看："
+    echo "systemctl status quota-dns-router-agent --no-pager -l"
+    echo "journalctl -u quota-dns-router-agent -n 100 --no-pager"
+    systemctl status quota-dns-router-agent --no-pager -l || true
+    journalctl -u quota-dns-router-agent -n 100 --no-pager || true
+    exit 1
+  fi
 }
 
 if [ -z "$JOIN_CODE" ]; then
@@ -301,6 +359,9 @@ step "[5/8] 构建 qdr-agent"
 build_agent
 
 step "[6/8] 加入 Master 并写入配置"
+ensure_user
+prepare_existing_service
+prepare_dirs
 join_master
 
 step "[7/8] 写入 systemd 并启动 Agent"
@@ -308,6 +369,8 @@ write_service
 start_service
 
 step "[8/8] 安装完成"
+check_service
 echo "Agent 已安装并启动。"
 echo "可执行：qdr-agent status"
-echo "也可查看：systemctl status quota-dns-router-agent --no-pager"
+echo "也可查看：systemctl status quota-dns-router-agent --no-pager -l"
+echo "查看日志：journalctl -u quota-dns-router-agent -n 100 --no-pager"

@@ -19,7 +19,7 @@ func LoadEnvFile(path string) (map[string]string, error) {
 		if os.IsNotExist(err) {
 			return out, nil
 		}
-		return nil, err
+		return nil, formatEnvFileReadError(path, err)
 	}
 	defer f.Close()
 
@@ -38,9 +38,20 @@ func LoadEnvFile(path string) (map[string]string, error) {
 		out[key] = val
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return nil, formatEnvFileReadError(path, err)
 	}
 	return out, nil
+}
+
+func formatEnvFileReadError(path string, err error) error {
+	if os.IsPermission(err) {
+		return fmt.Errorf(`无法读取配置文件 %s：权限不足。
+请检查：
+1. 文件属主是否为 root:quota-dns-router 或 quota-dns-router:quota-dns-router
+2. 文件权限是否为 640 或 600
+3. systemd 服务是否使用 User=quota-dns-router`, path)
+	}
+	return fmt.Errorf("无法读取配置文件 %s：%w", path, err)
 }
 
 func MergeEnv(fileValues map[string]string) map[string]string {

@@ -25,22 +25,30 @@ func run(args []string) error {
 	if len(args) > 0 {
 		cmd = args[0]
 	}
-	envPath := flagValue(args[1:], "--env", config.DefaultAgentEnvPath)
+	cfgPath, cfgPathProvided := configFlag(args[1:], config.DefaultAgentEnvPath)
 	switch cmd {
 	case "run":
-		cfg, err := config.LoadAgent(envPath, version.Version)
+		loadPath := ""
+		if cfgPathProvided {
+			loadPath = cfgPath
+		}
+		cfg, err := config.LoadAgent(loadPath, version.Version)
 		if err != nil {
 			return err
 		}
 		return agent.NewRunner(cfg).Run(context.Background())
 	case "once":
-		cfg, err := config.LoadAgent(envPath, version.Version)
+		loadPath := ""
+		if cfgPathProvided {
+			loadPath = cfgPath
+		}
+		cfg, err := config.LoadAgent(loadPath, version.Version)
 		if err != nil {
 			return err
 		}
 		return agent.NewRunner(cfg).Once(context.Background())
 	case "status":
-		cfg, err := config.LoadAgent(envPath, version.Version)
+		cfg, err := config.LoadAgent(cfgPath, version.Version)
 		if err != nil {
 			return err
 		}
@@ -63,6 +71,7 @@ func run(args []string) error {
 			return err
 		}
 		env := agent.RenderAgentEnv(resp, "")
+		envPath := flagValue(args[1:], "--env", config.DefaultAgentEnvPath)
 		if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
 			return err
 		}
@@ -71,7 +80,7 @@ func run(args []string) error {
 		}
 		fmt.Println("Agent 配置已写入：", envPath)
 	case "config-check":
-		cfg, err := config.LoadAgent(envPath, version.Version)
+		cfg, err := config.LoadAgent(cfgPath, version.Version)
 		if err != nil {
 			return err
 		}
@@ -86,12 +95,21 @@ func run(args []string) error {
 
 func printHelp() {
 	fmt.Println(`qdr-agent commands:
-  run [--env path]
-  once [--env path]
-  status [--env path]
+  run [--config path]
+  once [--config path]
+  status [--config path]
   join --code <code> --master <url> [--env path]
-  config-check [--env path]
+  config-check [--config path]
   version`)
+}
+
+func configFlag(args []string, fallback string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		if (args[i] == "--config" || args[i] == "--env") && i+1 < len(args) {
+			return args[i+1], true
+		}
+	}
+	return fallback, false
 }
 
 func flagValue(args []string, name, fallback string) string {

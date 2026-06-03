@@ -23,9 +23,6 @@ type AgentConfig struct {
 }
 
 func LoadAgent(path, version string) (AgentConfig, error) {
-	if path == "" {
-		path = DefaultAgentEnvPath
-	}
 	fileValues, err := LoadEnvFile(path)
 	if err != nil {
 		return AgentConfig{}, err

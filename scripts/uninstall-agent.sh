@@ -44,8 +44,14 @@ run rm -f /usr/local/bin/qdr-agent
 run rm -f /etc/quota-dns-router/agent.env
 run rm -f /var/lib/quota-dns-router/agent-state.json
 run systemctl daemon-reload
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[dry-run] systemctl reset-failed quota-dns-router-agent.service 2>/dev/null || true"
+else
+  systemctl reset-failed quota-dns-router-agent.service 2>/dev/null || true
+fi
 
 if [ "$PURGE" -eq 1 ]; then
+  run rm -f /etc/quota-dns-router/agent.env
   run rm -rf /var/lib/quota-dns-router
   run rm -rf /var/log/quota-dns-router
 fi

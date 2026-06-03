@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.1"
+VERSION="0.1.0-alpha.2"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -214,17 +214,39 @@ build_master() {
   install -m 0755 "${BUILD_DIR}/${BIN_NAME}" "${PREFIX}/${BIN_NAME}"
 }
 
-write_config() {
+ensure_user() {
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] 创建 ${ETC_DIR} ${DATA_DIR} ${LOG_DIR}"
-    echo "[dry-run] 写入 ${ETC_DIR}/master.env（Token 已隐藏）"
+    echo "[dry-run] 确保系统用户 quota-dns-router 存在"
     return
   fi
-  mkdir -p "$ETC_DIR" "$DATA_DIR" "$LOG_DIR"
   if ! id quota-dns-router >/dev/null 2>&1; then
     useradd --system --home "$DATA_DIR" --shell /usr/sbin/nologin quota-dns-router
   fi
+}
+
+prepare_existing_service() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl stop quota-dns-router-master.service 2>/dev/null || true"
+    return
+  fi
+  systemctl stop quota-dns-router-master.service 2>/dev/null || true
+}
+
+write_config() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] install -d -m 750 -o root -g quota-dns-router ${ETC_DIR}"
+    echo "[dry-run] install -d -m 750 -o quota-dns-router -g quota-dns-router ${DATA_DIR} ${LOG_DIR}"
+    echo "[dry-run] 写入 ${ETC_DIR}/master.env（Token 已隐藏），权限 root:quota-dns-router 640"
+    return
+  fi
+  install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"
+  install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"
   chown -R quota-dns-router:quota-dns-router "$DATA_DIR" "$LOG_DIR"
+  chmod 750 "$DATA_DIR" "$LOG_DIR"
+  if [ -f "${DATA_DIR}/master.db" ]; then
+    chown quota-dns-router:quota-dns-router "${DATA_DIR}/master.db"
+    chmod 600 "${DATA_DIR}/master.db"
+  fi
   cat > "${ETC_DIR}/master.env" <<EOF
 QDR_TELEGRAM_TOKEN=${TG_TOKEN}
 QDR_TELEGRAM_ADMIN_ID=${TG_ADMIN_ID}
@@ -238,8 +260,8 @@ QDR_CHECK_INTERVAL=60s
 QDR_AGENT_OFFLINE_AFTER=300s
 QDR_OFFLINE_NOTIFY_AFTER=600s
 EOF
-  chmod 0600 "${ETC_DIR}/master.env"
   chown root:quota-dns-router "${ETC_DIR}/master.env"
+  chmod 0640 "${ETC_DIR}/master.env"
   cat > "$UNIT" <<'EOF'
 [Unit]
 Description=Quota DNS Router Master
@@ -267,7 +289,28 @@ EOF
 
 start_service() {
   run systemctl daemon-reload
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl reset-failed quota-dns-router-master.service 2>/dev/null || true"
+  else
+    systemctl reset-failed quota-dns-router-master.service 2>/dev/null || true
+  fi
   run systemctl enable --now quota-dns-router-master.service
+}
+
+check_service() {
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] systemctl is-active --quiet quota-dns-router-master.service"
+    echo "[dry-run] 如失败，打印 systemctl status 和 journalctl 排查命令"
+    return
+  fi
+  if ! systemctl is-active --quiet quota-dns-router-master.service; then
+    echo "Master 服务未成功启动，请查看："
+    echo "systemctl status quota-dns-router-master --no-pager -l"
+    echo "journalctl -u quota-dns-router-master -n 100 --no-pager"
+    systemctl status quota-dns-router-master --no-pager -l || true
+    journalctl -u quota-dns-router-master -n 100 --no-pager || true
+    exit 1
+  fi
 }
 
 collect_config() {
@@ -309,11 +352,18 @@ step "[5/8] 构建 qdr-master"
 build_master
 
 step "[6/8] 写入配置和 systemd"
+ensure_user
+prepare_existing_service
 write_config
 
 step "[7/8] 启动 Master 服务"
 start_service
 
 step "[8/8] 安装完成"
+check_service
 echo "Master 已安装并启动。"
 echo "下一步：在 Telegram 向 Bot 发送 /start，然后配置 Master 公网地址、Cloudflare、DNS、节点和 Agent。"
+echo "建议检查：systemctl status quota-dns-router-master --no-pager -l"
+echo "查看日志：journalctl -u quota-dns-router-master -n 100 --no-pager"
+echo "CLI 诊断：qdr-master status"
+echo "配置检查：qdr-master config-check"

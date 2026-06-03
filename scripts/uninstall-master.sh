@@ -44,6 +44,11 @@ run systemctl disable quota-dns-router-master.service
 run rm -f /etc/systemd/system/quota-dns-router-master.service
 run rm -f /usr/local/bin/qdr-master
 run systemctl daemon-reload
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "[dry-run] systemctl reset-failed quota-dns-router-master.service 2>/dev/null || true"
+else
+  systemctl reset-failed quota-dns-router-master.service 2>/dev/null || true
+fi
 
 if [ "$PURGE" -eq 1 ]; then
   run rm -rf /etc/quota-dns-router

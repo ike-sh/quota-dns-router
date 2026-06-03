@@ -30,6 +30,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=quota-dns-router
+Group=quota-dns-router
 EnvironmentFile=/etc/quota-dns-router/agent.env
 ExecStart=/usr/local/bin/qdr-agent run
 Restart=always

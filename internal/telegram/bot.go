@@ -28,6 +28,33 @@ type UpdateResponse struct {
 	Result []Update `json:"result"`
 }
 
+type APIError struct {
+	Description string
+}
+
+func (e APIError) Error() string {
+	if e.Description == "" {
+		return "Telegram API 返回失败"
+	}
+	return e.Description
+}
+
+type BotUser struct {
+	ID        int64  `json:"id"`
+	IsBot     bool   `json:"is_bot"`
+	FirstName string `json:"first_name"`
+	Username  string `json:"username"`
+}
+
+type WebhookInfo struct {
+	URL              string `json:"url"`
+	PendingUpdates   int    `json:"pending_update_count"`
+	LastErrorDate    int64  `json:"last_error_date"`
+	LastErrorMessage string `json:"last_error_message"`
+	MaxConnections   int    `json:"max_connections"`
+	AllowedUpdates   any    `json:"allowed_updates"`
+}
+
 type Update struct {
 	UpdateID      int            `json:"update_id"`
 	Message       *Message       `json:"message"`
@@ -131,6 +158,53 @@ func (b *Bot) AnswerCallback(ctx context.Context, callbackID, text string) error
 	return b.post(ctx, "/answerCallbackQuery", payload)
 }
 
+func (b *Bot) GetMe(ctx context.Context) (BotUser, error) {
+	var out BotUser
+	if err := b.get(ctx, "/getMe", &out); err != nil {
+		return BotUser{}, err
+	}
+	return out, nil
+}
+
+func (b *Bot) GetWebhookInfo(ctx context.Context) (WebhookInfo, error) {
+	var out WebhookInfo
+	if err := b.get(ctx, "/getWebhookInfo", &out); err != nil {
+		return WebhookInfo{}, err
+	}
+	return out, nil
+}
+
+func (b *Bot) get(ctx context.Context, path string, result any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.baseURL+path, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := b.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	var generic struct {
+		OK          bool            `json:"ok"`
+		Result      json.RawMessage `json:"result"`
+		Description string          `json:"description"`
+	}
+	if err := json.Unmarshal(respBody, &generic); err != nil {
+		return err
+	}
+	if !generic.OK {
+		return APIError{Description: generic.Description}
+	}
+	if result == nil {
+		return nil
+	}
+	return json.Unmarshal(generic.Result, result)
+}
+
 func (b *Bot) post(ctx context.Context, path string, payload any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -151,13 +225,14 @@ func (b *Bot) post(ctx context.Context, path string, payload any) error {
 		return err
 	}
 	var generic struct {
-		OK bool `json:"ok"`
+		OK          bool   `json:"ok"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal(respBody, &generic); err != nil {
 		return err
 	}
 	if !generic.OK {
-		return fmt.Errorf("Telegram API 返回失败")
+		return APIError{Description: generic.Description}
 	}
 	return nil
 }

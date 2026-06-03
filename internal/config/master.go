@@ -24,9 +24,6 @@ type MasterConfig struct {
 }
 
 func LoadMaster(path string) (MasterConfig, error) {
-	if path == "" {
-		path = DefaultMasterEnvPath
-	}
 	fileValues, err := LoadEnvFile(path)
 	if err != nil {
 		return MasterConfig{}, err

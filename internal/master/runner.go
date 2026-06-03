@@ -67,6 +67,16 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 		errCh <- StartHTTP(ctx, cfg, runtime.Store)
 	}()
 	go func() {
+		if me, err := runtime.Bot.GetMe(ctx); err == nil {
+			if me.Username != "" {
+				fmt.Fprintf(os.Stdout, "Telegram bot connected: @%s\n", me.Username)
+			} else {
+				fmt.Fprintf(os.Stdout, "Telegram bot connected: bot_id=%d\n", me.ID)
+			}
+		} else {
+			fmt.Fprintf(os.Stderr, "Telegram getMe failed: %v\n", err)
+		}
+		fmt.Fprintln(os.Stdout, "Telegram long polling started")
 		controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS)
 		errCh <- controller.Run(ctx)
 	}()
@@ -101,6 +111,16 @@ func TelegramRun(ctx context.Context, cfg config.MasterConfig) error {
 		return err
 	}
 	defer runtime.Close()
+	if me, err := runtime.Bot.GetMe(ctx); err == nil {
+		if me.Username != "" {
+			fmt.Fprintf(os.Stdout, "Telegram bot connected: @%s\n", me.Username)
+		} else {
+			fmt.Fprintf(os.Stdout, "Telegram bot connected: bot_id=%d\n", me.ID)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "Telegram getMe failed: %v\n", err)
+	}
+	fmt.Fprintln(os.Stdout, "Telegram long polling started")
 	controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS)
 	return controller.Run(ctx)
 }
