@@ -862,9 +862,121 @@ func TestNodeDetailShowsPolicyActionsAndTroubleshooting(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "nodes_view:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"🖥 节点详情", "修改节点策略", "查看安装排查", "DNS 匹配：否"} {
+	for _, want := range []string{"🖥 节点详情", "流量统计：", "校准已用流量", "流量统计说明", "修改节点策略", "查看安装排查", "DNS 匹配：否"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected node detail payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
+func TestNodeTrafficCalibrationSetAndClear(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_calibrate_traffic:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	if controller.sessions[1] != pendingNodeTrafficOffset {
+		t.Fatalf("expected traffic offset pending, got %q", controller.sessions[1])
+	}
+	if !rec.contains("350.5GB") || !rec.contains("清零初始已用流量") {
+		t.Fatalf("expected calibration prompt, got %v", rec.payloads)
+	}
+	if err := controller.handleText(ctx, 1, "350.5GB"); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := controller.Store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(350.5 * 1024 * 1024 * 1024)
+	if updated.TrafficOffsetBytes != want || updated.TrafficOffsetCycle == "" {
+		t.Fatalf("expected offset saved, got %+v", updated)
+	}
+	if !rec.contains("当前已用流量已校准") || !rec.contains("初始已用：350.50GB") {
+		t.Fatalf("expected calibration success, got %v", rec.payloads)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_clear_traffic_offset:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	cleared, err := controller.Store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cleared.TrafficOffsetBytes != 0 || cleared.TrafficOffsetCycle != "" {
+		t.Fatalf("expected offset cleared, got %+v", cleared)
+	}
+}
+
+func TestNodesListShowsTrafficOffsetBreakdown(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cycle := db.BillingCycleStart(time.Now(), node.ResetDay).Format("2006-01-02")
+	if err := controller.Store.SetNodeTrafficOffset(ctx, node.ID, 350*1024*1024*1024, cycle); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_status"); err != nil {
+		t.Fatal(err)
+	}
+	if !rec.contains("其中：初始 350.00GB + Agent 增量 0.00GB") {
+		t.Fatalf("expected offset breakdown in nodes list, got %v", rec.payloads)
+	}
+}
+
+func TestParseGBSupportsDecimals(t *testing.T) {
+	tests := map[string]int64{
+		"350GB":   350 * 1024 * 1024 * 1024,
+		"1TB":     1024 * 1024 * 1024 * 1024,
+		"350.5GB": int64(350.5 * 1024 * 1024 * 1024),
+	}
+	for input, want := range tests {
+		got, err := parseGB(input)
+		if err != nil {
+			t.Fatalf("parseGB(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("parseGB(%q) got %d want %d", input, got, want)
 		}
 	}
 }

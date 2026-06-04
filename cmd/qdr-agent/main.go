@@ -52,11 +52,8 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		st, err := traffic.LoadState(cfg.StateFile)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("配置：%s\n最近计数：iface=%s rx=%d tx=%d at=%s\n", cfg.String(), st.Last.Iface, st.Last.RX, st.Last.TX, st.At.Format(time.RFC3339))
+		diag := traffic.BuildDiagnostics(cfg.Interface, cfg.StateFile, "", "")
+		fmt.Print(formatAgentStatus(cfg, diag))
 	case "join":
 		code := flagValue(args[1:], "--code", "")
 		if code == "" {
@@ -69,6 +66,10 @@ func run(args []string) error {
 		resp, err := agent.Join(context.Background(), masterURL, code, nil)
 		if err != nil {
 			return err
+		}
+		iface := flagValue(args[1:], "--iface", "")
+		if iface != "" {
+			resp.Interface = iface
 		}
 		env := agent.RenderAgentEnv(resp, "")
 		envPath := flagValue(args[1:], "--env", config.DefaultAgentEnvPath)
@@ -84,7 +85,8 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Println("配置检查通过：", cfg.String())
+		diag := traffic.BuildDiagnostics(cfg.Interface, cfg.StateFile, "", "")
+		fmt.Print(formatAgentConfigCheck(cfg, diag))
 	case "version":
 		fmt.Println(version.AgentString())
 	default:
@@ -93,12 +95,62 @@ func run(args []string) error {
 	return nil
 }
 
+func formatAgentStatus(cfg config.AgentConfig, diag traffic.Diagnostics) string {
+	lastAt := "-"
+	if !diag.LastState.At.IsZero() {
+		lastAt = diag.LastState.At.Format(time.RFC3339)
+	}
+	out := fmt.Sprintf(`Agent 状态：
+Master：%s
+节点：%s
+统计网卡：%s
+默认路由网卡：%s
+RX：%d
+TX：%d
+统计模式：RX+TX
+最近上报：%s
+`, cfg.MasterAPIURL, cfg.NodeName, valueOrDash(diag.SelectedIface), valueOrDash(diag.RouteIface), diag.Snapshot.RX, diag.Snapshot.TX, lastAt)
+	if diag.Warning != "" {
+		out += diag.Warning + "\n"
+	}
+	if diag.Error != "" {
+		out += "错误：" + diag.Error + "\n"
+	}
+	return out
+}
+
+func formatAgentConfigCheck(cfg config.AgentConfig, diag traffic.Diagnostics) string {
+	readable := "不可读取"
+	if diag.ProcNetDevReadable {
+		readable = "可读取"
+	}
+	out := fmt.Sprintf(`配置检查通过：%s
+/proc/net/dev：%s
+默认路由网卡：%s
+统计网卡：%s
+`, cfg.String(), readable, valueOrDash(diag.RouteIface), valueOrDash(diag.SelectedIface))
+	if diag.Warning != "" {
+		out += diag.Warning + "\n"
+	}
+	if diag.Error != "" {
+		out += "错误：" + diag.Error + "\n"
+	}
+	return out
+}
+
+func valueOrDash(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
+}
+
 func printHelp() {
 	fmt.Println(`qdr-agent commands:
   run [--config path]
   once [--config path]
   status [--config path]
-  join --code <code> --master <url> [--env path]
+  join --code <code> --master <url> [--iface eth0] [--env path]
   config-check [--config path]
   version`)
 }

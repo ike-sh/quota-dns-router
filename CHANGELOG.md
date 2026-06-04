@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.1.0-alpha.12
+
+- 节点新增本周期 `traffic_offset_bytes` 校准能力，可在 Telegram 节点详情中设置/清零“初始已用流量”，用于导入服务商面板已有的本月用量。
+- 节点列表、节点详情、阈值判断、自动切换和通知统一使用“初始已用 + Agent 增量”的合计流量；新账期开始后校准值自动清零。
+- `qdr-agent status` / `config-check` 增强网卡诊断，显示统计网卡、默认路由网卡、RX/TX 和 `/proc/net/dev` 可读性，并提示统计网卡与默认路由不一致。
+- Agent 安装/加入支持 `--iface eth0` 显式配置统计网卡；`auto` 继续优先识别默认路由网卡。
+- 版本升级到 `0.1.0-alpha.12`，同步更新安装脚本、README 和测试。
+
 ## 0.1.0-alpha.11
 
 - Telegram Agent 安装页新增 `copy_text` 复制安装/卸载命令按钮，旧客户端继续保留“显示纯安装命令 / 显示纯卸载命令”fallback；复制和显示纯命令都不会刷新 join code，只有“重新生成命令”刷新。

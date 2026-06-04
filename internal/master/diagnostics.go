@@ -47,23 +47,25 @@ type DNSSummary struct {
 }
 
 type NodeDiagnostic struct {
-	Name              string
-	GroupName         string
-	PublicIP          string
-	Online            bool
-	HasReported       bool
-	LastReportedText  string
-	TrafficMode       string
-	UsedBytes         int64
-	MonthlyQuotaBytes int64
-	UsagePercent      float64
-	ThresholdPercent  int
-	ResetDay          int
-	Enabled           bool
-	AutoSwitch        bool
-	Priority          int
-	ReachedThreshold  bool
-	EligibleTarget    bool
+	Name               string
+	GroupName          string
+	PublicIP           string
+	Online             bool
+	HasReported        bool
+	LastReportedText   string
+	TrafficMode        string
+	TrafficOffsetBytes int64
+	AgentUsedBytes     int64
+	UsedBytes          int64
+	MonthlyQuotaBytes  int64
+	UsagePercent       float64
+	ThresholdPercent   int
+	ResetDay           int
+	Enabled            bool
+	AutoSwitch         bool
+	Priority           int
+	ReachedThreshold   bool
+	EligibleTarget     bool
 }
 
 type GroupDiagnostic struct {
@@ -270,23 +272,25 @@ func BuildNodeDiagnostics(ctx context.Context, store *db.Store, now time.Time) (
 			reached := db.UsagePercent(usage.UsedBytes, usage.MonthlyQuotaBytes) >= float64(usage.ThresholdPercent)
 			eligible := usage.Enabled && usage.AutoSwitch && !reached && nodeIsReachable(usage, policy, now) && (!group.CurrentNodeID.Valid || usage.ID != group.CurrentNodeID.String)
 			out = append(out, NodeDiagnostic{
-				Name:              usage.Name,
-				GroupName:         group.Name,
-				PublicIP:          usage.PublicIP,
-				Online:            nodeIsReachable(usage, policy, now),
-				HasReported:       hasReported,
-				LastReportedText:  lastText,
-				TrafficMode:       usage.TrafficMode,
-				UsedBytes:         usage.UsedBytes,
-				MonthlyQuotaBytes: usage.MonthlyQuotaBytes,
-				UsagePercent:      db.UsagePercent(usage.UsedBytes, usage.MonthlyQuotaBytes),
-				ThresholdPercent:  usage.ThresholdPercent,
-				ResetDay:          usage.ResetDay,
-				Enabled:           usage.Enabled,
-				AutoSwitch:        usage.AutoSwitch,
-				Priority:          usage.Priority,
-				ReachedThreshold:  reached,
-				EligibleTarget:    eligible,
+				Name:               usage.Name,
+				GroupName:          group.Name,
+				PublicIP:           usage.PublicIP,
+				Online:             nodeIsReachable(usage, policy, now),
+				HasReported:        hasReported,
+				LastReportedText:   lastText,
+				TrafficMode:        usage.TrafficMode,
+				TrafficOffsetBytes: usage.TrafficOffsetBytes,
+				AgentUsedBytes:     usage.AgentUsedBytes,
+				UsedBytes:          usage.UsedBytes,
+				MonthlyQuotaBytes:  usage.MonthlyQuotaBytes,
+				UsagePercent:       db.UsagePercent(usage.UsedBytes, usage.MonthlyQuotaBytes),
+				ThresholdPercent:   usage.ThresholdPercent,
+				ResetDay:           usage.ResetDay,
+				Enabled:            usage.Enabled,
+				AutoSwitch:         usage.AutoSwitch,
+				Priority:           usage.Priority,
+				ReachedThreshold:   reached,
+				EligibleTarget:     eligible,
 			})
 		}
 	}
@@ -532,6 +536,9 @@ func FormatNodeDiagnostics(items []NodeDiagnostic) string {
 		}
 		b.WriteString("统计：" + modeLabel(item.TrafficMode) + "\n")
 		b.WriteString("已用：" + humanBytes(item.UsedBytes) + " / " + humanBytes(item.MonthlyQuotaBytes) + "\n")
+		if item.TrafficOffsetBytes > 0 {
+			b.WriteString("其中：初始 " + humanBytes(item.TrafficOffsetBytes) + " + Agent 增量 " + humanBytes(item.AgentUsedBytes) + "\n")
+		}
 		b.WriteString(fmt.Sprintf("使用率：%.1f%%\n", item.UsagePercent))
 		b.WriteString(fmt.Sprintf("阈值：%d%%\n", item.ThresholdPercent))
 		b.WriteString(fmt.Sprintf("重置日：%d\n", item.ResetDay))

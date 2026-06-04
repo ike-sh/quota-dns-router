@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.11")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.12")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.11")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.12")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -65,6 +65,11 @@ func TestInstallAgentDryRunDefaultsToBinaryRelease(t *testing.T) {
 	for _, unwanted := range []string{"go build", "git clone", "golang-go", "build-essential"} {
 		assertNotContains(t, out, unwanted)
 	}
+}
+
+func TestInstallAgentDryRunSupportsIface(t *testing.T) {
+	out := runBash(t, "bash install-agent.sh --join abc --master http://203.0.113.10:8080 --iface eth0 --dry-run")
+	assertContains(t, out, "/usr/local/bin/qdr-agent join --code <已隐藏> --master http://203.0.113.10:8080 --iface eth0 --env /etc/quota-dns-router/agent.env")
 }
 
 func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
@@ -161,7 +166,8 @@ func TestInstallScriptsExposeModeAndFallbackControls(t *testing.T) {
 func TestInstallAgentScriptSupportsMasterAndVersionCheck(t *testing.T) {
 	body := readScript(t, "install-agent.sh")
 	for _, want := range []string{
-		`[--master <url>] [--yes] [--dry-run] [--help] [--version]`,
+		`[--master <url>] [--iface eth0] [--yes] [--dry-run] [--help] [--version]`,
+		`--iface                  显式统计网卡；未提供时使用 Master 返回值或 auto`,
 		`--yes                    兼容参数，Agent 安装默认无交互`,
 		`缺少 Master 地址。请使用 --master <url>，或直接使用 Telegram 生成的完整命令。`,
 		`${PREFIX}/${BIN_NAME} version`,
@@ -213,7 +219,7 @@ func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
 func TestInstallScriptsUseVersionedReleaseDownloads(t *testing.T) {
 	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
 		body := readScript(t, name)
-		assertContains(t, body, `VERSION="0.1.0-alpha.11"`)
+		assertContains(t, body, `VERSION="0.1.0-alpha.12"`)
 		assertContains(t, body, `release_base="${repo_no_git}/releases/download/v${VERSION}"`)
 	}
 }

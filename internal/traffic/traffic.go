@@ -33,6 +33,17 @@ type Sample struct {
 	TXDelta      int64
 }
 
+type Diagnostics struct {
+	ProcNetDevReadable bool
+	RouteIface         string
+	SelectedIface      string
+	ConfiguredIface    string
+	Snapshot           Snapshot
+	LastState          State
+	Warning            string
+	Error              string
+}
+
 func ReadProcNetDev(path string) (map[string]Snapshot, error) {
 	if path == "" {
 		path = "/proc/net/dev"
@@ -77,6 +88,15 @@ func ReadProcNetDev(path string) (map[string]Snapshot, error) {
 	return out, scanner.Err()
 }
 
+func ResolveInterface(configuredIface, routePath string) (string, string, error) {
+	configuredIface = strings.TrimSpace(configuredIface)
+	routeIface, err := DetectDefaultInterface(routePath)
+	if configuredIface != "" && configuredIface != "auto" {
+		return configuredIface, routeIface, nil
+	}
+	return routeIface, routeIface, err
+}
+
 func DetectDefaultInterface(path string) (string, error) {
 	if path == "" {
 		path = "/proc/net/route"
@@ -114,6 +134,43 @@ func DetectDefaultInterface(path string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("未找到默认出口网卡")
+}
+
+func BuildDiagnostics(configuredIface, stateFile, devPath, routePath string) Diagnostics {
+	diag := Diagnostics{
+		ConfiguredIface: strings.TrimSpace(configuredIface),
+	}
+	if diag.ConfiguredIface == "" {
+		diag.ConfiguredIface = "auto"
+	}
+	selected, routeIface, ifaceErr := ResolveInterface(diag.ConfiguredIface, routePath)
+	diag.RouteIface = routeIface
+	diag.SelectedIface = selected
+	dev, devErr := ReadProcNetDev(devPath)
+	if devErr == nil {
+		diag.ProcNetDevReadable = true
+	}
+	if selected != "" && devErr == nil {
+		if snap, ok := dev[selected]; ok {
+			diag.Snapshot = snap
+		} else {
+			diag.Error = "未找到统计网卡 " + selected
+		}
+	}
+	if stateFile != "" {
+		if state, err := LoadState(stateFile); err == nil {
+			diag.LastState = state
+		}
+	}
+	if ifaceErr != nil {
+		diag.Error = ifaceErr.Error()
+	} else if devErr != nil {
+		diag.Error = devErr.Error()
+	}
+	if diag.SelectedIface != "" && diag.RouteIface != "" && diag.SelectedIface != diag.RouteIface {
+		diag.Warning = fmt.Sprintf("⚠️ 当前统计网卡 %s 与默认路由网卡 %s 不一致，请检查 Agent 配置。", diag.SelectedIface, diag.RouteIface)
+	}
+	return diag
 }
 
 func LoadState(path string) (State, error) {

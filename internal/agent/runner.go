@@ -46,13 +46,9 @@ func (r *Runner) Run(ctx context.Context) error {
 }
 
 func (r *Runner) Once(ctx context.Context) error {
-	iface := r.Config.Interface
-	if iface == "" || iface == "auto" {
-		detected, err := traffic.DetectDefaultInterface("")
-		if err != nil {
-			return err
-		}
-		iface = detected
+	iface, routeIface, err := traffic.ResolveInterface(r.Config.Interface, "")
+	if err != nil {
+		return err
 	}
 	dev, err := traffic.ReadProcNetDev("")
 	if err != nil {
@@ -67,7 +63,8 @@ func (r *Runner) Once(ctx context.Context) error {
 		return err
 	}
 	sample := traffic.BuildSample(current, state)
-	if err := traffic.SaveState(r.Config.StateFile, traffic.State{Last: current, At: time.Now()}); err != nil {
+	now := time.Now().UTC()
+	if err := traffic.SaveState(r.Config.StateFile, traffic.State{Last: current, At: now}); err != nil {
 		return err
 	}
 	report := api.AgentReportRequest{
@@ -75,11 +72,14 @@ func (r *Runner) Once(ctx context.Context) error {
 		Hostname:     r.Config.Hostname,
 		PublicIP:     traffic.DiscoverPublicIP(r.Config.PublicIPOverride, r.HTTPClient),
 		Iface:        sample.Iface,
+		RouteIface:   routeIface,
 		RXBytesTotal: sample.RXBytesTotal,
 		TXBytesTotal: sample.TXBytesTotal,
 		RXDelta:      sample.RXDelta,
 		TXDelta:      sample.TXDelta,
-		ReportedAt:   time.Now().UTC(),
+		ReportedAt:   now,
+		ReportTime:   now,
+		TrafficMode:  "rx+tx",
 		AgentVersion: r.Config.Version,
 		Status:       "online",
 	}

@@ -33,6 +33,7 @@ const (
 	pendingNodeModeSelect       = "node_mode_select"
 	pendingNodeResetDay         = "node_reset_day"
 	pendingNodePriority         = "node_priority"
+	pendingNodeTrafficOffset    = "node_traffic_offset"
 	pendingNodeConfirm          = "node_confirm"
 	pendingPolicyValue          = "policy_value"
 	sessionSwitchNotice         = "已切换到新的配置流程。"
@@ -250,6 +251,15 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 	case strings.HasPrefix(data, "nodes_edit_priority:"):
 		nodeID := strings.TrimPrefix(data, "nodes_edit_priority:")
 		return true, c.startNodePolicyFieldEdit(ctx, chatID, nodeID, nodeEditFieldPriority)
+	case strings.HasPrefix(data, "nodes_calibrate_traffic:"):
+		nodeID := strings.TrimPrefix(data, "nodes_calibrate_traffic:")
+		return true, c.startNodeTrafficOffsetPrompt(ctx, chatID, nodeID)
+	case strings.HasPrefix(data, "nodes_clear_traffic_offset:"):
+		nodeID := strings.TrimPrefix(data, "nodes_clear_traffic_offset:")
+		return true, c.clearNodeTrafficOffset(ctx, chatID, nodeID)
+	case strings.HasPrefix(data, "nodes_traffic_help:"):
+		nodeID := strings.TrimPrefix(data, "nodes_traffic_help:")
+		return true, c.sendNodeTrafficHelp(ctx, chatID, nodeID)
 	case strings.HasPrefix(data, "nodes_edit_toggle_enabled:"):
 		nodeID := strings.TrimPrefix(data, "nodes_edit_toggle_enabled:")
 		return true, c.toggleNodeEnabledAndShowPolicy(ctx, chatID, nodeID)
@@ -344,6 +354,8 @@ func (c *TelegramController) handlePendingInput(ctx context.Context, chatID int6
 		return c.handleNodeResetDayValue(ctx, chatID, text)
 	case pendingNodePriority:
 		return c.handleNodePriorityValue(ctx, chatID, text)
+	case pendingNodeTrafficOffset:
+		return c.handleNodeTrafficOffsetInput(ctx, chatID, text)
 	case pendingNodeConfirm:
 		if c.currentSessionValue(chatID, sessionKeyNodeFlow) == "edit" {
 			return c.sendMessageOrEdit(ctx, chatID, "请点击保存策略或取消。", nodePolicyConfirmMenu())
@@ -1439,15 +1451,19 @@ func (c *TelegramController) sendNodeDetail(ctx context.Context, chatID int64, n
 		agentStatus = "离线（最后上报 " + lastReportedText + "）"
 	}
 	text := prefix + fmt.Sprintf(
-		"🖥 节点详情\n\n节点：%s\n分组：%s\n公网 IP：%s\nAgent：%s\nDNS 匹配：%s\n月流量：%s\n阈值：%d%%\n统计：%s\n重置日：%d\n优先级：%d\n启用：%t\n自动切换：%t\n\n请选择操作：",
+		"🖥 节点详情\n\n节点：%s\n分组：%s\n公网 IP：%s\nAgent：%s\nDNS 匹配：%s\n\n流量统计：\n统计模式：%s\n初始已用：%s\nAgent 增量：%s\n合计已用：%s / %s\n使用率：%.1f%%\n阈值：%d%%\n重置日：%d\n\n优先级：%d\n启用：%t\n自动切换：%t\n\n请选择操作：",
 		node.Name,
 		group.Name,
 		node.PublicIP,
 		agentStatus,
 		ternaryText(dnsMatch, "是", "否"),
-		formatNodeQuota(strconv.FormatInt(node.MonthlyQuotaBytes, 10)),
-		node.ThresholdPercent,
 		modeLabel(node.TrafficMode),
+		humanBytes(usage.TrafficOffsetBytes),
+		humanBytes(usage.AgentUsedBytes),
+		humanBytes(usage.UsedBytes),
+		humanBytes(usage.MonthlyQuotaBytes),
+		db.UsagePercent(usage.UsedBytes, usage.MonthlyQuotaBytes),
+		node.ThresholdPercent,
 		node.ResetDay,
 		node.Priority,
 		node.Enabled,
@@ -1498,6 +1514,67 @@ func (c *TelegramController) toggleNodeAutoSwitch(ctx context.Context, chatID in
 		return err
 	}
 	return c.sendNodeDetail(ctx, chatID, node.ID, "✅ 节点自动切换状态已更新。\n\n")
+}
+
+func (c *TelegramController) startNodeTrafficOffsetPrompt(ctx context.Context, chatID int64, nodeID string) error {
+	if _, err := c.Store.GetNodeByID(ctx, nodeID); err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	prefix := c.beginFlow(chatID, pendingNodeTrafficOffset, map[string]string{sessionKeyNodeID: nodeID})
+	text := prefix + "请发送当前节点本月已用流量，例如：\n\n100GB\n350.5GB\n1TB\n\n这个值会作为本周期初始已用流量，加上 Agent 后续增量一起参与阈值判断。\n\n发送 /cancel 取消。"
+	return c.sendPromptAndTrack(ctx, chatID, pendingNodeTrafficOffset, text, nodeTrafficOffsetPromptMenu(nodeID))
+}
+
+func (c *TelegramController) handleNodeTrafficOffsetInput(ctx context.Context, chatID int64, text string) error {
+	nodeID := c.currentSessionValue(chatID, sessionKeyNodeID)
+	if strings.TrimSpace(nodeID) == "" {
+		c.clearSession(chatID)
+		return c.sendMessageOrEdit(ctx, chatID, "流量校准流程已失效，请重新进入节点详情。", nodesPanelMenu(nil))
+	}
+	value, err := parseGB(text)
+	if err != nil || value < 0 {
+		c.setSession(chatID, pendingNodeTrafficOffset)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 已用流量格式错误，请发送类似 350GB、350.5GB 或 1TB 的值。", nodeTrafficOffsetPromptMenu(nodeID))
+	}
+	return c.saveNodeTrafficOffset(ctx, chatID, nodeID, value)
+}
+
+func (c *TelegramController) clearNodeTrafficOffset(ctx context.Context, chatID int64, nodeID string) error {
+	return c.saveNodeTrafficOffset(ctx, chatID, nodeID, 0)
+}
+
+func (c *TelegramController) saveNodeTrafficOffset(ctx context.Context, chatID int64, nodeID string, bytes int64) error {
+	node, err := c.Store.GetNodeByID(ctx, nodeID)
+	if err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	cycle := db.BillingCycleStart(timeNow(), node.ResetDay).Format("2006-01-02")
+	if bytes == 0 {
+		cycle = ""
+	}
+	if err := c.Store.SetNodeTrafficOffset(ctx, node.ID, bytes, cycle); err != nil {
+		c.setSession(chatID, pendingNodeTrafficOffset)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ 保存当前已用流量失败："+err.Error(), nodeTrafficOffsetPromptMenu(node.ID))
+	}
+	updated, err := c.Store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		return err
+	}
+	usage, err := c.Store.GetNodeUsage(ctx, updated, timeNow())
+	if err != nil {
+		return err
+	}
+	c.completePrompt(ctx, chatID)
+	c.clearSession(chatID)
+	return c.sendMessageOrEdit(ctx, chatID, formatNodeTrafficOffsetSavedMessage(updated, usage), nodeTrafficOffsetSavedMenu(updated.ID))
+}
+
+func (c *TelegramController) sendNodeTrafficHelp(ctx context.Context, chatID int64, nodeID string) error {
+	if _, err := c.Store.GetNodeByID(ctx, nodeID); err != nil {
+		return c.sendMessageOrEdit(ctx, chatID, "节点不存在，请重新选择。", nodesPanelMenu(nil))
+	}
+	text := "流量统计说明：\n\nAgent 默认读取节点网卡流量，只能统计安装/首次上报后的增量。\n如果这台服务器本月已经用过流量，请点击“校准已用流量”，填入服务商面板显示的本月已用值。\n\n常用检查命令：\ncat /proc/net/dev\nip route get 192.0.2.1\nqdr-agent status\nqdr-agent config-check"
+	return c.sendMessageOrEdit(ctx, chatID, text, nodeTrafficHelpMenu(nodeID))
 }
 
 func (c *TelegramController) sendAgentTroubleshooting(ctx context.Context, chatID int64, nodeID string) error {
@@ -2049,6 +2126,8 @@ func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarku
 	rows := [][]telegram.InlineKeyboardButton{
 		{{Text: "手动切换到此节点", CallbackData: "switch_to_node:" + node.ID}},
 		{{Text: installText, CallbackData: "agent_node:" + node.ID}},
+		{{Text: "校准已用流量", CallbackData: "nodes_calibrate_traffic:" + node.ID}},
+		{{Text: "流量统计说明", CallbackData: "nodes_traffic_help:" + node.ID}},
 		{{Text: "修改节点策略", CallbackData: "nodes_edit_policy:" + node.ID}},
 		{{Text: enabledText, CallbackData: "nodes_toggle_enabled:" + node.ID}},
 		{{Text: autoText, CallbackData: "nodes_toggle_auto:" + node.ID}},
@@ -2061,6 +2140,30 @@ func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarku
 		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
 	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func nodeTrafficOffsetPromptMenu(nodeID string) *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "清零初始已用流量", CallbackData: "nodes_clear_traffic_offset:" + nodeID}},
+		{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
+}
+
+func nodeTrafficOffsetSavedMenu(nodeID string) *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
+		{{Text: "当前状态", CallbackData: "status"}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
+}
+
+func nodeTrafficHelpMenu(nodeID string) *telegram.ReplyMarkup {
+	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+		{{Text: "校准已用流量", CallbackData: "nodes_calibrate_traffic:" + nodeID}},
+		{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
+		{{Text: "返回主菜单", CallbackData: "menu"}},
+	}}
 }
 
 func nodePolicyEditMenu(node db.Node) *telegram.ReplyMarkup {

@@ -2,7 +2,7 @@
 
 `quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
 
-当前版本：`0.1.0-alpha.11`
+当前版本：`0.1.0-alpha.12`
 
 本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。
 
@@ -155,6 +155,25 @@ DNS 向导的新规则：
 - `复制卸载命令` / `显示纯卸载命令`：卸载命令同理，优先复制按钮，必要时再发送纯命令。
 
 预览页会同时显示安装说明、join code 到期时间和 Agent 卸载命令。Telegram Bot API 对 `copy_text.text` 有长度限制，命令过长时会保留“显示纯安装命令 / 显示纯卸载命令”fallback。
+
+## 流量统计口径
+
+Agent 读取 Linux `/proc/net/dev` 网卡计数，默认统计 Agent 安装/首次上报之后的增量流量。因此刚安装完成时，Telegram `/nodes` 里看到的“已用”可能只有 `0.01GB` 这类很小的数值，这表示 Agent 后续捕获到的增量，不代表服务商本月账单里的历史用量。
+
+如果节点本月已经产生历史流量，需要在 Telegram 节点详情中使用 `校准已用流量`，填入服务商面板里的本月已用值。系统会按：
+
+```text
+合计已用 = 初始已用流量 + Agent 后续增量
+```
+
+来显示用量、计算使用率、触发阈值通知和执行自动切换。新账期开始后，手动校准的初始已用流量会自动清零；如果新周期仍需导入服务商面板数值，可以重新校准。
+
+示例：
+
+```text
+服务商面板显示本月已用 350GB：
+Telegram -> 节点管理 -> 节点详情 -> 校准已用流量 -> 输入 350GB
+```
 
 ## 通知功能
 

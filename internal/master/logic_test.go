@@ -53,6 +53,17 @@ func TestReasonForSwitchThreshold(t *testing.T) {
 	}
 }
 
+func TestReasonForSwitchThresholdUsesTrafficOffset(t *testing.T) {
+	policy := db.DefaultPolicy()
+	current := db.NodeUsage{
+		Node:          db.Node{Enabled: true, AutoSwitch: true, Online: true, MonthlyQuotaBytes: 100, ThresholdPercent: 80, TrafficOffsetBytes: 75},
+		UsageSnapshot: db.UsageSnapshot{AgentUsedBytes: 5, UsedBytes: 80},
+	}
+	if reason := reasonForSwitch(current, policy, time.Now()); reason != switchReasonThreshold {
+		t.Fatalf("expected threshold reason from offset + agent usage, got %q", reason)
+	}
+}
+
 func TestThresholdNotificationDedupesWithinCycleAndResetsNextCycle(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()

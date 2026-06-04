@@ -687,7 +687,7 @@ func setupMenu() *telegram.ReplyMarkup {
 
 func parseGB(v string) (int64, error) {
 	v = strings.TrimSpace(strings.ToUpper(strings.TrimSuffix(v, "B")))
-	multiplier := int64(1)
+	multiplier := float64(1)
 	if strings.HasSuffix(v, "G") {
 		multiplier = 1024 * 1024 * 1024
 		v = strings.TrimSuffix(v, "G")
@@ -698,11 +698,11 @@ func parseGB(v string) (int64, error) {
 		multiplier = 1024 * 1024 * 1024 * 1024
 		v = strings.TrimSuffix(v, "T")
 	}
-	n, err := strconv.ParseInt(v, 10, 64)
+	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
 		return 0, err
 	}
-	return n * multiplier, nil
+	return int64(n * multiplier), nil
 }
 
 func parseBool(v string, fallback bool) bool {
@@ -1268,6 +1268,18 @@ func manualSwitchAlreadyOnTargetMessage(decision SwitchDecision) string {
 		valueOrDash(decision.Config.RecordName),
 		valueOrDash(decision.Target.Name),
 		valueOrDash(decision.Target.PublicIP),
+	)
+}
+
+func formatNodeTrafficOffsetSavedMessage(node db.Node, usage db.NodeUsage) string {
+	return fmt.Sprintf(
+		"✅ 当前已用流量已校准\n\n节点：%s\n初始已用：%s\nAgent 增量：%s\n合计已用：%s / %s\n使用率：%.1f%%",
+		node.Name,
+		humanBytes(usage.TrafficOffsetBytes),
+		humanBytes(usage.AgentUsedBytes),
+		humanBytes(usage.UsedBytes),
+		humanBytes(usage.MonthlyQuotaBytes),
+		db.UsagePercent(usage.UsedBytes, usage.MonthlyQuotaBytes),
 	)
 }
 

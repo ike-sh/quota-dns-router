@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.11"
+VERSION="0.1.0-alpha.12"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -23,6 +23,7 @@ SOURCE_USR_LOCAL_MIN_SPACE_MB=800
 
 JOIN_CODE=""
 MASTER_URL="${QDR_MASTER_API_URL:-}"
+AGENT_IFACE="${QDR_AGENT_IFACE:-}"
 YES=0
 DRY_RUN=0
 STAGE="初始化"
@@ -33,11 +34,12 @@ GO_TMP_DIR=""
 
 usage() {
   cat <<'EOF'
-用法：install-agent.sh --join <code> [--master <url>] [--yes] [--dry-run] [--help] [--version]
+用法：install-agent.sh --join <code> [--master <url>] [--iface eth0] [--yes] [--dry-run] [--help] [--version]
 
 说明：
   --join / --code          Telegram 生成的加入码，必填
   --master                 Master 公网地址；未提供时读取 QDR_MASTER_API_URL
+  --iface                  显式统计网卡；未提供时使用 Master 返回值或 auto
   --yes                    兼容参数，Agent 安装默认无交互
 
 环境变量：
@@ -69,6 +71,15 @@ while [ $# -gt 0 ]; do
         exit 1
       fi
       MASTER_URL="${2:-}"
+      shift 2
+      continue
+      ;;
+    --iface)
+      if [ $# -lt 2 ]; then
+        echo "缺少 --iface <name> 的参数值。"
+        exit 1
+      fi
+      AGENT_IFACE="${2:-}"
       shift 2
       continue
       ;;
@@ -584,12 +595,18 @@ prepare_dirs() {
 }
 
 join_master() {
+  local iface_args=()
+  local iface_text=""
+  if [ -n "$AGENT_IFACE" ]; then
+    iface_args=(--iface "$AGENT_IFACE")
+    iface_text=" --iface ${AGENT_IFACE}"
+  fi
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL} --env ${ETC_DIR}/agent.env"
+    echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL}${iface_text} --env ${ETC_DIR}/agent.env"
     return 0
   fi
 
-  "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" --env "${ETC_DIR}/agent.env"
+  "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" "${iface_args[@]}" --env "${ETC_DIR}/agent.env"
   chown root:quota-dns-router "${ETC_DIR}/agent.env"
   chmod 0640 "${ETC_DIR}/agent.env"
 }

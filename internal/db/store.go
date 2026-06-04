@@ -91,6 +91,8 @@ type Node struct {
 	PreferredIface        string
 	ReportIntervalSeconds int
 	Online                bool
+	TrafficOffsetBytes    int64
+	TrafficOffsetCycle    string
 	LastReportedAt        sql.NullTime
 	FirstSeenAt           sql.NullTime
 	CreatedAt             time.Time
@@ -113,10 +115,11 @@ type AgentReport struct {
 }
 
 type UsageSnapshot struct {
-	CycleStart string
-	RXBytes    int64
-	TXBytes    int64
-	UsedBytes  int64
+	CycleStart     string
+	RXBytes        int64
+	TXBytes        int64
+	AgentUsedBytes int64
+	UsedBytes      int64
 }
 
 type NodeUsage struct {
@@ -619,10 +622,10 @@ func (s *Store) CreateNode(ctx context.Context, n Node) (Node, error) {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO nodes(
 			id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-			traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online
-		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle
+		) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, n.ID, nullStringValue(n.AgentID), n.GroupID, n.Name, n.PublicIP, n.MonthlyQuotaBytes, n.ThresholdPercent, n.ResetDay,
-		n.TrafficMode, boolInt(n.Enabled), boolInt(n.AutoSwitch), n.Priority, n.PreferredIface, n.ReportIntervalSeconds, boolInt(n.Online))
+		n.TrafficMode, boolInt(n.Enabled), boolInt(n.AutoSwitch), n.Priority, n.PreferredIface, n.ReportIntervalSeconds, boolInt(n.Online), n.TrafficOffsetBytes, n.TrafficOffsetCycle)
 	if err != nil {
 		return Node{}, err
 	}
@@ -632,7 +635,7 @@ func (s *Store) CreateNode(ctx context.Context, n Node) (Node, error) {
 func (s *Store) GetNodeByName(ctx context.Context, name string) (Node, error) {
 	return scanNode(s.db.QueryRowContext(ctx, `
 		SELECT id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online,
+		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle,
 		       last_reported_at, first_seen_at, created_at, updated_at
 		FROM nodes WHERE name = ?
 	`, name))
@@ -641,7 +644,7 @@ func (s *Store) GetNodeByName(ctx context.Context, name string) (Node, error) {
 func (s *Store) GetNodeByID(ctx context.Context, id string) (Node, error) {
 	return scanNode(s.db.QueryRowContext(ctx, `
 		SELECT id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online,
+		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle,
 		       last_reported_at, first_seen_at, created_at, updated_at
 		FROM nodes WHERE id = ?
 	`, id))
@@ -650,7 +653,7 @@ func (s *Store) GetNodeByID(ctx context.Context, id string) (Node, error) {
 func (s *Store) GetNodeByAgentID(ctx context.Context, agentID string) (Node, error) {
 	return scanNode(s.db.QueryRowContext(ctx, `
 		SELECT id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online,
+		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle,
 		       last_reported_at, first_seen_at, created_at, updated_at
 		FROM nodes WHERE agent_id = ?
 	`, agentID))
@@ -659,7 +662,7 @@ func (s *Store) GetNodeByAgentID(ctx context.Context, agentID string) (Node, err
 func (s *Store) ListNodesByGroupID(ctx context.Context, groupID string) ([]Node, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online,
+		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle,
 		       last_reported_at, first_seen_at, created_at, updated_at
 		FROM nodes WHERE group_id = ? ORDER BY priority ASC, name ASC
 	`, groupID)
@@ -672,7 +675,7 @@ func (s *Store) ListNodesByGroupID(ctx context.Context, groupID string) ([]Node,
 		var n Node
 		if err := rows.Scan(&n.ID, &n.AgentID, &n.GroupID, &n.Name, &n.PublicIP, &n.MonthlyQuotaBytes, &n.ThresholdPercent, &n.ResetDay,
 			&n.TrafficMode, &n.Enabled, &n.AutoSwitch, &n.Priority, &n.PreferredIface, &n.ReportIntervalSeconds, &n.Online,
-			&n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt); err != nil {
+			&n.TrafficOffsetBytes, &n.TrafficOffsetCycle, &n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -683,7 +686,7 @@ func (s *Store) ListNodesByGroupID(ctx context.Context, groupID string) ([]Node,
 func (s *Store) ListNodes(ctx context.Context) ([]NodeWithGroup, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT n.id, n.agent_id, n.group_id, n.name, n.public_ip, n.monthly_quota_bytes, n.threshold_percent, n.reset_day,
-		       n.traffic_mode, n.enabled, n.auto_switch, n.priority, n.preferred_iface, n.report_interval_seconds, n.online,
+		       n.traffic_mode, n.enabled, n.auto_switch, n.priority, n.preferred_iface, n.report_interval_seconds, n.online, n.traffic_offset_bytes, n.traffic_offset_cycle,
 		       n.last_reported_at, n.first_seen_at, n.created_at, n.updated_at, g.name
 		FROM nodes n
 		JOIN groups g ON g.id = n.group_id
@@ -698,7 +701,7 @@ func (s *Store) ListNodes(ctx context.Context) ([]NodeWithGroup, error) {
 		var n NodeWithGroup
 		if err := rows.Scan(&n.ID, &n.AgentID, &n.GroupID, &n.Name, &n.PublicIP, &n.MonthlyQuotaBytes, &n.ThresholdPercent, &n.ResetDay,
 			&n.TrafficMode, &n.Enabled, &n.AutoSwitch, &n.Priority, &n.PreferredIface, &n.ReportIntervalSeconds, &n.Online,
-			&n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt, &n.GroupName); err != nil {
+			&n.TrafficOffsetBytes, &n.TrafficOffsetCycle, &n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt, &n.GroupName); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -735,6 +738,20 @@ func (s *Store) SetNodeAutoSwitch(ctx context.Context, nodeID string, autoSwitch
 		SET auto_switch = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, boolInt(autoSwitch), nodeID)
+	return err
+}
+
+func (s *Store) SetNodeTrafficOffset(ctx context.Context, nodeID string, bytes int64, cycle string) error {
+	if bytes < 0 {
+		bytes = 0
+	}
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE nodes
+		SET traffic_offset_bytes = ?,
+		    traffic_offset_cycle = ?,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?
+	`, bytes, cycle, nodeID)
 	return err
 }
 
@@ -802,7 +819,7 @@ func (s *Store) RedeemJoinCode(ctx context.Context, code string) (JoinCodeResult
 
 	node, err := scanNodeTx(tx.QueryRowContext(ctx, `
 		SELECT id, agent_id, group_id, name, public_ip, monthly_quota_bytes, threshold_percent, reset_day,
-		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online,
+		       traffic_mode, enabled, auto_switch, priority, preferred_iface, report_interval_seconds, online, traffic_offset_bytes, traffic_offset_cycle,
 		       last_reported_at, first_seen_at, created_at, updated_at
 		FROM nodes WHERE id = ?
 	`, nodeID))
@@ -950,6 +967,21 @@ func (s *Store) GetNodeUsage(ctx context.Context, node Node, at time.Time) (Node
 	if err != nil {
 		return NodeUsage{}, err
 	}
+	snap.AgentUsedBytes = snap.UsedBytes
+	offset := node.TrafficOffsetBytes
+	if snap.CycleStart == "" {
+		snap.CycleStart = BillingCycleStart(at, node.ResetDay).Format("2006-01-02")
+	}
+	if node.TrafficOffsetCycle != snap.CycleStart {
+		offset = 0
+		if node.TrafficOffsetBytes != 0 || node.TrafficOffsetCycle != "" {
+			_ = s.SetNodeTrafficOffset(ctx, node.ID, 0, "")
+			node.TrafficOffsetBytes = 0
+			node.TrafficOffsetCycle = ""
+		}
+	}
+	snap.UsedBytes = snap.AgentUsedBytes + offset
+	node.TrafficOffsetBytes = offset
 	return NodeUsage{Node: node, UsageSnapshot: snap}, nil
 }
 
@@ -1270,7 +1302,7 @@ func scanNode(row *sql.Row) (Node, error) {
 	var n Node
 	err := row.Scan(&n.ID, &n.AgentID, &n.GroupID, &n.Name, &n.PublicIP, &n.MonthlyQuotaBytes, &n.ThresholdPercent, &n.ResetDay,
 		&n.TrafficMode, &n.Enabled, &n.AutoSwitch, &n.Priority, &n.PreferredIface, &n.ReportIntervalSeconds, &n.Online,
-		&n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt)
+		&n.TrafficOffsetBytes, &n.TrafficOffsetCycle, &n.LastReportedAt, &n.FirstSeenAt, &n.CreatedAt, &n.UpdatedAt)
 	return n, err
 }
 
