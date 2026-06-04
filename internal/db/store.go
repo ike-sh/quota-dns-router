@@ -249,7 +249,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
+		if err := s.applyMigration(ctx, tx, name, string(body)); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("执行 migration %s 失败: %w", name, err)
 		}
@@ -262,6 +262,77 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) applyMigration(ctx context.Context, tx *sql.Tx, name, body string) error {
+	switch name {
+	case "003_switch_trigger_type.sql":
+		return applySwitchTriggerTypeMigration(ctx, tx)
+	case "004_traffic_offset.sql":
+		return applyTrafficOffsetMigration(ctx, tx)
+	default:
+		_, err := tx.ExecContext(ctx, body)
+		return err
+	}
+}
+
+func applySwitchTriggerTypeMigration(ctx context.Context, tx *sql.Tx) error {
+	if err := ensureColumn(ctx, tx, "dns_switch_history", "trigger_type", `ALTER TABLE dns_switch_history ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'threshold'`); err != nil {
+		return err
+	}
+	_, err := tx.ExecContext(ctx, `
+		UPDATE dns_switch_history
+		SET trigger_type = CASE
+			WHEN lower(trigger_type) != 'threshold' THEN trigger_type
+			WHEN reason = '手动切换' THEN 'manual'
+			WHEN reason = '当前节点离线' THEN 'offline'
+			WHEN reason = '当前节点已禁用' THEN 'disabled'
+			WHEN reason = '当前节点不参与自动切换' THEN 'disabled'
+			ELSE 'threshold'
+		END
+	`)
+	return err
+}
+
+func applyTrafficOffsetMigration(ctx context.Context, tx *sql.Tx) error {
+	if err := ensureColumn(ctx, tx, "nodes", "traffic_offset_bytes", `ALTER TABLE nodes ADD COLUMN traffic_offset_bytes INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return err
+	}
+	return ensureColumn(ctx, tx, "nodes", "traffic_offset_cycle", `ALTER TABLE nodes ADD COLUMN traffic_offset_cycle TEXT NOT NULL DEFAULT ''`)
+}
+
+func ensureColumn(ctx context.Context, tx *sql.Tx, table, column, ddl string) error {
+	exists, err := columnExists(ctx, tx, table, column)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+	_, err = tx.ExecContext(ctx, ddl)
+	return err
+}
+
+func columnExists(ctx context.Context, tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, column) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func NewID(prefix string) string {

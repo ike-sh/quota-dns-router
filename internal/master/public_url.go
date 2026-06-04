@@ -42,7 +42,7 @@ func NormalizeMasterPublicURLInput(raw string) (string, bool, error) {
 		return "", false, fmt.Errorf("Master 公网地址不能为空")
 	}
 	if strings.HasPrefix(strings.ToLower(original), "http:") && !strings.HasPrefix(strings.ToLower(original), "http://") {
-		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：http://192.236.242.173:8080")
+		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：http://203.0.113.10:8080")
 	}
 	if strings.HasPrefix(strings.ToLower(original), "https:") && !strings.HasPrefix(strings.ToLower(original), "https://") {
 		return "", false, fmt.Errorf("URL 格式不正确：请使用 http:// 或 https:// 开头。\n示例：https://example.com")
@@ -52,7 +52,7 @@ func NormalizeMasterPublicURLInput(raw string) (string, bool, error) {
 	normalized := false
 	if !strings.Contains(candidate, "://") {
 		if strings.ContainsAny(candidate, "/?#") {
-			return "", false, fmt.Errorf("请带上协议，例如：http://192.236.242.173:8080")
+			return "", false, fmt.Errorf("请带上协议，例如：http://203.0.113.10:8080")
 		}
 		if !hasExplicitPort(candidate) {
 			candidate += ":8080"

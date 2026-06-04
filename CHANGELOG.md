@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.1.0-rc.1
+
+- 版本升级到 `0.1.0-rc.1`，同步 Master / Agent CLI、安装脚本、README 和 release 下载路径。
+- 安装器补齐升级/修复安装路径：检测到已有安装时停止旧服务、备份现有 env、保留配置和数据、替换二进制并重启服务。
+- 卸载脚本修复 `--purge` 文案，区分保留数据与完全清理，并保持重复卸载幂等。
+- migration 增强旧库兼容，列已存在但 migration 未记录时不会因重复 `ALTER TABLE` 失败。
+- 增加 smoke 验收脚本，用于 Master / Agent 版本、systemd、权限和 CLI 诊断检查。
+
 ## 0.1.0-alpha.12
 
 - 节点新增本周期 `traffic_offset_bytes` 校准能力，可在 Telegram 节点详情中设置/清零“初始已用流量”，用于导入服务商面板已有的本月用量。

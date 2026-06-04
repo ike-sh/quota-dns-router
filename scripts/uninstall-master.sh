@@ -3,17 +3,15 @@ set -euo pipefail
 
 YES=0
 PURGE=0
-KEEP_DATA=0
 DRY_RUN=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --yes) YES=1 ;;
     --purge) PURGE=1 ;;
-    --keep-data) KEEP_DATA=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --help)
-      echo "用法：uninstall-master.sh [--yes] [--purge] [--keep-data] [--dry-run]"
+      echo "用法：uninstall-master.sh [--yes] [--purge] [--dry-run]"
       exit 0
       ;;
     *) echo "未知参数：$1"; exit 1 ;;
@@ -29,7 +27,7 @@ run() {
   fi
 }
 
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$DRY_RUN" -ne 1 ] && [ "$(id -u)" -ne 0 ]; then
   echo "请使用 root 运行卸载脚本。"
   exit 1
 fi
@@ -52,13 +50,16 @@ fi
 
 if [ "$PURGE" -eq 1 ]; then
   run rm -rf /etc/quota-dns-router
-  if [ "$KEEP_DATA" -ne 1 ]; then
-    run rm -rf /var/lib/quota-dns-router
-  fi
+  run rm -rf /var/lib/quota-dns-router
   run rm -rf /var/log/quota-dns-router
   if id quota-dns-router >/dev/null 2>&1; then
     run userdel quota-dns-router
   fi
 fi
 
-echo "Master 卸载完成。默认保留 /var/lib/quota-dns-router；使用 --purge 删除更多数据。"
+if [ "$PURGE" -eq 1 ]; then
+  echo "Master 已完全卸载，配置、数据、日志、unit、二进制已清理。"
+else
+  echo "Master 卸载完成，默认保留数据目录 /var/lib/quota-dns-router。"
+  echo "如需完全清理，请使用 --purge。"
+fi

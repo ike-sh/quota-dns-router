@@ -1,6 +1,6 @@
 package version
 
-const Version = "0.1.0-alpha.12"
+const Version = "0.1.0-rc.1"
 
 func MasterString() string {
 	return "quota-dns-router master " + Version

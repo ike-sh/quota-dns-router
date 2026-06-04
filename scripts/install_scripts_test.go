@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.12")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-rc.1")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.12")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-rc.1")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -72,6 +72,12 @@ func TestInstallAgentDryRunSupportsIface(t *testing.T) {
 	assertContains(t, out, "/usr/local/bin/qdr-agent join --code <已隐藏> --master http://203.0.113.10:8080 --iface eth0 --env /etc/quota-dns-router/agent.env")
 }
 
+func TestInstallAgentDryRunDoesNotLeakJoinCode(t *testing.T) {
+	out := runBash(t, "bash install-agent.sh --join secret-join-code --master http://203.0.113.10:8080 --dry-run")
+	assertContains(t, out, "--code <已隐藏>")
+	assertNotContains(t, out, "secret-join-code")
+}
+
 func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	masterOut := runBash(t, "QDR_INSTALL_MODE=source QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
 	for _, want := range []string{
@@ -99,16 +105,16 @@ func TestInstallScriptsSetSecurePermissions(t *testing.T) {
 	master := readScript(t, "install-master.sh")
 	assertContains(t, master, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
 	assertContains(t, master, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
-	assertContains(t, master, `chown root:quota-dns-router "${ETC_DIR}/master.env"`)
-	assertContains(t, master, `chmod 0640 "${ETC_DIR}/master.env"`)
+	assertContains(t, master, `chown root:quota-dns-router "${MASTER_ENV}"`)
+	assertContains(t, master, `chmod 0640 "${MASTER_ENV}"`)
 	assertContains(t, master, `chown quota-dns-router:quota-dns-router "${DATA_DIR}/master.db"`)
 	assertContains(t, master, `chmod 600 "${DATA_DIR}/master.db"`)
 
 	agent := readScript(t, "install-agent.sh")
 	assertContains(t, agent, `install -d -m 750 -o root -g quota-dns-router "$ETC_DIR"`)
 	assertContains(t, agent, `install -d -m 750 -o quota-dns-router -g quota-dns-router "$DATA_DIR" "$LOG_DIR"`)
-	assertContains(t, agent, `chown root:quota-dns-router "${ETC_DIR}/agent.env"`)
-	assertContains(t, agent, `chmod 0640 "${ETC_DIR}/agent.env"`)
+	assertContains(t, agent, `chown root:quota-dns-router "${AGENT_ENV}"`)
+	assertContains(t, agent, `chmod 0640 "${AGENT_ENV}"`)
 	assertContains(t, agent, `User=quota-dns-router`)
 	assertContains(t, agent, `Group=quota-dns-router`)
 }
@@ -219,8 +225,48 @@ func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
 func TestInstallScriptsUseVersionedReleaseDownloads(t *testing.T) {
 	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
 		body := readScript(t, name)
-		assertContains(t, body, `VERSION="0.1.0-alpha.12"`)
+		assertContains(t, body, `VERSION="0.1.0-rc.1"`)
 		assertContains(t, body, `release_base="${repo_no_git}/releases/download/v${VERSION}"`)
+	}
+}
+
+func TestInstallScriptsExposeUpgradeRepairPath(t *testing.T) {
+	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
+		body := readScript(t, name)
+		for _, want := range []string{
+			"检测到已安装，将执行升级/修复安装。",
+			".bak.$(date +%Y%m%d%H%M%S)",
+			"已备份现有配置：",
+			"prepare_upgrade_context",
+		} {
+			assertContains(t, body, want)
+		}
+		assertNotContains(t, body, "echo \"$TG_TOKEN")
+		assertNotContains(t, body, "echo \"$AGENT_TOKEN")
+	}
+	assertContains(t, readScript(t, "install-agent.sh"), "保留现有 ${AGENT_ENV}，跳过 join")
+}
+
+func TestInstallScriptsUseChineseNonAmd64ReleaseMessage(t *testing.T) {
+	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
+		body := readScript(t, name)
+		assertContains(t, body, "当前 release 仅提供 linux/amd64 二进制。")
+		assertContains(t, body, "QDR_INSTALL_MODE=source ...")
+	}
+}
+
+func TestSmokeScriptSupportsMasterAndAgent(t *testing.T) {
+	body := readScript(t, "smoke.sh")
+	for _, want := range []string{
+		"用法：smoke.sh master|agent",
+		"qdr-master status",
+		"qdr-master config-check",
+		"qdr-master telegram-status",
+		"qdr-agent status",
+		"qdr-agent config-check",
+		"验收通过。",
+	} {
+		assertContains(t, body, want)
 	}
 }
 
@@ -243,6 +289,26 @@ func TestUninstallScriptsPurgeAndResetFailed(t *testing.T) {
 		"systemctl reset-failed quota-dns-router-agent.service",
 	} {
 		assertContains(t, agent, want)
+	}
+}
+
+func TestUninstallScriptsReportPurgeAndNonPurgeMessages(t *testing.T) {
+	for _, item := range []struct {
+		script  string
+		service string
+		kept    string
+		cleaned string
+	}{
+		{"uninstall-master.sh", "Master", "Master 卸载完成，默认保留数据目录 /var/lib/quota-dns-router。", "Master 已完全卸载，配置、数据、日志、unit、二进制已清理。"},
+		{"uninstall-agent.sh", "Agent", "Agent 卸载完成，默认保留数据目录 /var/lib/quota-dns-router。", "Agent 已完全卸载，配置、数据、日志、unit、二进制已清理。"},
+	} {
+		out := runScript(t, item.script, "--yes", "--dry-run")
+		assertContains(t, out, item.kept)
+		assertContains(t, out, "如需完全清理，请使用 --purge。")
+		out = runScript(t, item.script, "--yes", "--purge", "--dry-run")
+		assertContains(t, out, item.cleaned)
+		assertContains(t, out, "systemctl daemon-reload")
+		assertContains(t, out, "systemctl reset-failed quota-dns-router-"+strings.ToLower(item.service)+".service")
 	}
 }
 

@@ -27,7 +27,7 @@ run() {
   fi
 }
 
-if [ "$(id -u)" -ne 0 ]; then
+if [ "$DRY_RUN" -ne 1 ] && [ "$(id -u)" -ne 0 ]; then
   echo "请使用 root 运行卸载脚本。"
   exit 1
 fi
@@ -41,8 +41,6 @@ run systemctl stop quota-dns-router-agent.service
 run systemctl disable quota-dns-router-agent.service
 run rm -f /etc/systemd/system/quota-dns-router-agent.service
 run rm -f /usr/local/bin/qdr-agent
-run rm -f /etc/quota-dns-router/agent.env
-run rm -f /var/lib/quota-dns-router/agent-state.json
 run systemctl daemon-reload
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "[dry-run] systemctl reset-failed quota-dns-router-agent.service 2>/dev/null || true"
@@ -51,9 +49,14 @@ else
 fi
 
 if [ "$PURGE" -eq 1 ]; then
-  run rm -f /etc/quota-dns-router/agent.env
+  run rm -rf /etc/quota-dns-router
   run rm -rf /var/lib/quota-dns-router
   run rm -rf /var/log/quota-dns-router
 fi
 
-echo "Agent 卸载完成。"
+if [ "$PURGE" -eq 1 ]; then
+  echo "Agent 已完全卸载，配置、数据、日志、unit、二进制已清理。"
+else
+  echo "Agent 卸载完成，默认保留数据目录 /var/lib/quota-dns-router。"
+  echo "如需完全清理，请使用 --purge。"
+fi

@@ -31,6 +31,7 @@ func TestRepositoryExamplesUseReservedPlaceholders(t *testing.T) {
 		"1.2.3." + "4",
 		"5.6.7." + "8",
 		"9.9.9." + "9",
+		"192.236.242." + "173",
 	}
 
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {

@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.12"
+VERSION="0.1.0-rc.1"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
 LOG_DIR="/var/log/quota-dns-router"
 UNIT="/etc/systemd/system/quota-dns-router-master.service"
 BIN_NAME="qdr-master"
+MASTER_ENV="${ETC_DIR}/master.env"
 REPO="${QDR_REPO:-https://github.com/ike-sh/quota-dns-router}"
 BRANCH="${QDR_BRANCH:-main}"
 GO_VERSION="${QDR_GO_VERSION:-1.25.0}"
@@ -32,6 +33,9 @@ DETECTED_PUBLIC_IP=""
 SUGGESTED_PUBLIC_API_URL=""
 TG_TOKEN=""
 TG_ADMIN_ID=""
+MASTER_PUBLIC_API_URL=""
+EXISTING_INSTALL=0
+MASTER_ENV_BACKUP=""
 
 usage() {
   cat <<'EOF'
@@ -112,6 +116,43 @@ require_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+env_value() {
+  local file="$1" key="$2"
+  if [ -f "$file" ]; then
+    grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2- || true
+  fi
+}
+
+detect_existing_install() {
+  if [ -f "$MASTER_ENV" ] || [ -f "$UNIT" ] || [ -x "${PREFIX}/${BIN_NAME}" ]; then
+    EXISTING_INSTALL=1
+  fi
+}
+
+backup_master_env() {
+  if [ "$EXISTING_INSTALL" -ne 1 ] || [ ! -f "$MASTER_ENV" ]; then
+    return 0
+  fi
+  MASTER_ENV_BACKUP="${MASTER_ENV}.bak.$(date +%Y%m%d%H%M%S)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] cp ${MASTER_ENV} ${MASTER_ENV_BACKUP}"
+  else
+    cp "$MASTER_ENV" "$MASTER_ENV_BACKUP"
+    chown root:quota-dns-router "$MASTER_ENV_BACKUP" 2>/dev/null || true
+    chmod 0640 "$MASTER_ENV_BACKUP" 2>/dev/null || true
+  fi
+  echo "已备份现有配置：${MASTER_ENV_BACKUP}"
+}
+
+prepare_upgrade_context() {
+  if [ "$EXISTING_INSTALL" -ne 1 ]; then
+    return 0
+  fi
+  echo "检测到已安装，将执行升级/修复安装。"
+  prepare_existing_service
+  backup_master_env
 }
 
 normalize_install_mode() {
@@ -493,7 +534,9 @@ install_master_from_release() {
 
   arch="$(detect_linux_arch)"
   if [ "$arch" != "amd64" ]; then
-    echo "binary release currently supports linux/amd64 only; detected ${arch}. Please set QDR_INSTALL_MODE=source." >&2
+    echo "当前 release 仅提供 linux/amd64 二进制。" >&2
+    echo "如需在当前架构安装，请使用：" >&2
+    echo "QDR_INSTALL_MODE=source ..." >&2
     return 1
   fi
   repo_no_git="${REPO%.git}"
@@ -532,6 +575,11 @@ install_master_from_release() {
 
 detect_public_ip() {
   local ip endpoint
+
+  if [ "$EXISTING_INSTALL" -eq 1 ] && [ -n "$DETECTED_PUBLIC_IP" ]; then
+    echo "保留现有公网地址检测结果：${DETECTED_PUBLIC_IP}"
+    return 0
+  fi
 
   if [ "$DRY_RUN" -eq 1 ]; then
     DETECTED_PUBLIC_IP="${QDR_DETECTED_PUBLIC_IP:-203.0.113.10}"
@@ -575,7 +623,7 @@ write_config() {
   if [ "$DRY_RUN" -eq 1 ]; then
     echo "[dry-run] install -d -m 750 -o root -g quota-dns-router ${ETC_DIR}"
     echo "[dry-run] install -d -m 750 -o quota-dns-router -g quota-dns-router ${DATA_DIR} ${LOG_DIR}"
-    echo "[dry-run] 写入 ${ETC_DIR}/master.env（Token 已隐藏），权限 root:quota-dns-router 640"
+    echo "[dry-run] 写入 ${MASTER_ENV}（Token 已隐藏），权限 root:quota-dns-router 640"
     echo "[dry-run] QDR_DETECTED_PUBLIC_IP=${DETECTED_PUBLIC_IP}"
     echo "[dry-run] QDR_SUGGESTED_PUBLIC_API_URL=${SUGGESTED_PUBLIC_API_URL}"
     return 0
@@ -590,11 +638,11 @@ write_config() {
     chmod 600 "${DATA_DIR}/master.db"
   fi
 
-  cat > "${ETC_DIR}/master.env" <<EOF
+  cat > "${MASTER_ENV}" <<EOF
 QDR_TELEGRAM_TOKEN=${TG_TOKEN}
 QDR_TELEGRAM_ADMIN_ID=${TG_ADMIN_ID}
 QDR_MASTER_LISTEN_ADDR=:8080
-QDR_MASTER_PUBLIC_API_URL=http://127.0.0.1:8080
+QDR_MASTER_PUBLIC_API_URL=${MASTER_PUBLIC_API_URL}
 QDR_MASTER_DB_PATH=${DATA_DIR}/master.db
 QDR_MASTER_DATA_DIR=${DATA_DIR}
 QDR_MASTER_LOG_DIR=${LOG_DIR}
@@ -605,8 +653,8 @@ QDR_CHECK_INTERVAL=60s
 QDR_AGENT_OFFLINE_AFTER=300s
 QDR_OFFLINE_NOTIFY_AFTER=600s
 EOF
-  chown root:quota-dns-router "${ETC_DIR}/master.env"
-  chmod 0640 "${ETC_DIR}/master.env"
+  chown root:quota-dns-router "${MASTER_ENV}"
+  chmod 0640 "${MASTER_ENV}"
 
   cat > "$UNIT" <<'EOF'
 [Unit]
@@ -660,12 +708,18 @@ check_service() {
 }
 
 collect_config() {
-  TG_TOKEN="${QDR_TELEGRAM_BOT_TOKEN:-${QDR_TELEGRAM_TOKEN:-}}"
-  TG_ADMIN_ID="${QDR_TELEGRAM_ADMIN_ID:-}"
+  TG_TOKEN="${QDR_TELEGRAM_BOT_TOKEN:-${QDR_TELEGRAM_TOKEN:-$(env_value "$MASTER_ENV" QDR_TELEGRAM_TOKEN)}}"
+  TG_ADMIN_ID="${QDR_TELEGRAM_ADMIN_ID:-$(env_value "$MASTER_ENV" QDR_TELEGRAM_ADMIN_ID)}"
+  MASTER_PUBLIC_API_URL="${QDR_MASTER_PUBLIC_API_URL:-$(env_value "$MASTER_ENV" QDR_MASTER_PUBLIC_API_URL)}"
+  DETECTED_PUBLIC_IP="${QDR_DETECTED_PUBLIC_IP:-$(env_value "$MASTER_ENV" QDR_DETECTED_PUBLIC_IP)}"
+  SUGGESTED_PUBLIC_API_URL="${QDR_SUGGESTED_PUBLIC_API_URL:-$(env_value "$MASTER_ENV" QDR_SUGGESTED_PUBLIC_API_URL)}"
+  if [ -z "$MASTER_PUBLIC_API_URL" ]; then
+    MASTER_PUBLIC_API_URL="http://127.0.0.1:8080"
+  fi
 
   if [ "$YES" -eq 1 ]; then
     if [ -z "$TG_TOKEN" ] || [ -z "$TG_ADMIN_ID" ]; then
-      echo "--yes 模式需要提前设置 QDR_TELEGRAM_BOT_TOKEN 和 QDR_TELEGRAM_ADMIN_ID。" >&2
+      echo "--yes 模式需要提前设置 QDR_TELEGRAM_BOT_TOKEN 和 QDR_TELEGRAM_ADMIN_ID；升级已有安装时可复用 ${MASTER_ENV}。" >&2
       return 1
     fi
     return 0
@@ -710,6 +764,7 @@ install_master_binary_mode() {
   step "[1/7] 检查系统环境"
   require_root
   detect_linux_arch >/dev/null
+  prepare_upgrade_context
   ensure_binary_disk_space
 
   step "[2/7] 安装最小依赖"
@@ -738,6 +793,7 @@ install_master_source_mode() {
   step "[1/8] 检查系统环境"
   require_root
   detect_linux_arch >/dev/null
+  prepare_upgrade_context
   ensure_source_disk_space
 
   step "[2/8] 安装源码构建依赖"
@@ -811,6 +867,7 @@ finish_message() {
 
 main() {
   normalize_install_mode
+  detect_existing_install
   collect_config
 
   case "$INSTALL_MODE" in

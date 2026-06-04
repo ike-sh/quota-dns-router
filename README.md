@@ -2,9 +2,9 @@
 
 `quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
 
-当前版本：`0.1.0-alpha.12`
+当前版本：`0.1.0-rc.1`
 
-本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。
+本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。当前 release 仅提供 `linux/amd64` 二进制，其他架构请使用 `QDR_INSTALL_MODE=source`。
 
 ## 架构说明
 
@@ -58,12 +58,18 @@ QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID
 只有显式指定 `QDR_INSTALL_MODE=source` 时，脚本才会准备 Go、下载源码并现场构建：
 
 ```bash
-QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxx --master http://x.x.x.x:8080
+QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxx --master http://203.0.113.10:8080
 ```
 
 源码模式需要更多磁盘空间，且仅在该模式下才会进入 Go 工具链准备与源码编译流程。
 
-更新前如需完全清理旧版本，推荐先执行：
+从旧 alpha 版本升级到当前 RC 时，通常直接重新执行安装脚本即可。安装器检测到已有安装后会进入升级/修复路径：停止旧服务、备份现有 env、保留配置和数据、替换二进制、修复权限并重启服务。备份文件类似：
+
+```text
+/etc/quota-dns-router/master.env.bak.20260604123000
+```
+
+如需完全清理旧版本再重装，才执行：
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge
@@ -381,6 +387,24 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main
 
 卸载脚本支持 `--dry-run` 和 `--help`，重复执行不会因为文件不存在而致命失败。
 
+非 `--purge` 卸载会移除服务和二进制，并默认保留 `/var/lib/quota-dns-router` 数据目录；`--purge` 会清理配置、数据、日志、systemd unit 和二进制。
+
+## 升级
+
+Master 升级：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-master.sh) --yes
+```
+
+Agent 升级：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --yes
+```
+
+已有 Agent 安装存在 `/etc/quota-dns-router/agent.env` 时，升级会保留 Master URL、Agent ID、Agent Token、节点名、iface 和 state 文件。只有需要重新绑定节点时，才使用 Telegram 重新生成的完整 Agent 安装命令。
+
 ## CLI
 
 Master：
@@ -501,6 +525,13 @@ qdr-master config-check
 - 可以先做 dry-run 式人工验证：检查当前 DNS 配置、节点优先级、阈值和自动切换开关。
 - 再通过降低阈值或构造测试流量，模拟阈值触发，观察 Telegram 通知和 Cloudflare A 记录切换结果。
 
+也可以在服务器上运行 smoke 验收脚本：
+
+```bash
+bash scripts/smoke.sh master
+bash scripts/smoke.sh agent
+```
+
 ## 排障查看顺序
 
 推荐按下面顺序排查：
@@ -528,6 +559,14 @@ qdr-master config-check
 - Agent API 必须使用 Bearer Token。
 - callback_data 不包含密钥。
 - 不提供远程执行 shell 命令能力。
+
+## 当前限制
+
+- 当前正式版仅支持 Cloudflare DNS A 记录。
+- 当前 release 仅提供 `linux/amd64` 二进制。
+- 暂不支持 Web UI。
+- 暂不支持多 DNS 服务商。
+- 暂不支持 AAAA 记录。
 
 ## 测试
 

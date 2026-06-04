@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-alpha.12"
+VERSION="0.1.0-rc.1"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
 LOG_DIR="/var/log/quota-dns-router"
 UNIT="/etc/systemd/system/quota-dns-router-agent.service"
 BIN_NAME="qdr-agent"
+AGENT_ENV="${ETC_DIR}/agent.env"
 REPO="${QDR_REPO:-https://github.com/ike-sh/quota-dns-router}"
 BRANCH="${QDR_BRANCH:-main}"
 GO_VERSION="${QDR_GO_VERSION:-1.25.0}"
@@ -31,6 +32,8 @@ WORK_DIR=""
 SRC_DIR=""
 BUILD_DIR=""
 GO_TMP_DIR=""
+EXISTING_INSTALL=0
+AGENT_ENV_BACKUP=""
 
 usage() {
   cat <<'EOF'
@@ -141,6 +144,52 @@ require_root() {
 
 require_command() {
   command -v "$1" >/dev/null 2>&1
+}
+
+env_value() {
+  local file="$1" key="$2"
+  if [ -f "$file" ]; then
+    grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2- || true
+  fi
+}
+
+detect_existing_install() {
+  if [ -f "$AGENT_ENV" ] || [ -f "$UNIT" ] || [ -x "${PREFIX}/${BIN_NAME}" ]; then
+    EXISTING_INSTALL=1
+  fi
+}
+
+backup_agent_env() {
+  if [ "$EXISTING_INSTALL" -ne 1 ] || [ ! -f "$AGENT_ENV" ]; then
+    return 0
+  fi
+  AGENT_ENV_BACKUP="${AGENT_ENV}.bak.$(date +%Y%m%d%H%M%S)"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "[dry-run] cp ${AGENT_ENV} ${AGENT_ENV_BACKUP}"
+  else
+    cp "$AGENT_ENV" "$AGENT_ENV_BACKUP"
+    chown root:quota-dns-router "$AGENT_ENV_BACKUP" 2>/dev/null || true
+    chmod 0640 "$AGENT_ENV_BACKUP" 2>/dev/null || true
+  fi
+  echo "已备份现有配置：${AGENT_ENV_BACKUP}"
+}
+
+load_existing_agent_defaults() {
+  if [ -z "$MASTER_URL" ]; then
+    MASTER_URL="$(env_value "$AGENT_ENV" QDR_MASTER_API_URL)"
+  fi
+  if [ -z "$AGENT_IFACE" ]; then
+    AGENT_IFACE="$(env_value "$AGENT_ENV" QDR_AGENT_IFACE)"
+  fi
+}
+
+prepare_upgrade_context() {
+  if [ "$EXISTING_INSTALL" -ne 1 ]; then
+    return 0
+  fi
+  echo "检测到已安装，将执行升级/修复安装。"
+  prepare_existing_service
+  backup_agent_env
 }
 
 normalize_install_mode() {
@@ -522,7 +571,9 @@ install_agent_from_release() {
 
   arch="$(detect_linux_arch)"
   if [ "$arch" != "amd64" ]; then
-    echo "binary release currently supports linux/amd64 only; detected ${arch}. Please set QDR_INSTALL_MODE=source." >&2
+    echo "当前 release 仅提供 linux/amd64 二进制。" >&2
+    echo "如需在当前架构安装，请使用：" >&2
+    echo "QDR_INSTALL_MODE=source ..." >&2
     return 1
   fi
   repo_no_git="${REPO%.git}"
@@ -597,18 +648,27 @@ prepare_dirs() {
 join_master() {
   local iface_args=()
   local iface_text=""
+  if [ "$EXISTING_INSTALL" -eq 1 ] && [ -z "$JOIN_CODE" ] && [ -f "$AGENT_ENV" ]; then
+    if [ "$DRY_RUN" -eq 1 ]; then
+      echo "[dry-run] 保留现有 ${AGENT_ENV}，跳过 join"
+    else
+      chown root:quota-dns-router "$AGENT_ENV"
+      chmod 0640 "$AGENT_ENV"
+    fi
+    return 0
+  fi
   if [ -n "$AGENT_IFACE" ]; then
     iface_args=(--iface "$AGENT_IFACE")
     iface_text=" --iface ${AGENT_IFACE}"
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
-    echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL}${iface_text} --env ${ETC_DIR}/agent.env"
+    echo "[dry-run] ${PREFIX}/${BIN_NAME} join --code <已隐藏> --master ${MASTER_URL}${iface_text} --env ${AGENT_ENV}"
     return 0
   fi
 
-  "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" "${iface_args[@]}" --env "${ETC_DIR}/agent.env"
-  chown root:quota-dns-router "${ETC_DIR}/agent.env"
-  chmod 0640 "${ETC_DIR}/agent.env"
+  "${PREFIX}/${BIN_NAME}" join --code "$JOIN_CODE" --master "$MASTER_URL" "${iface_args[@]}" --env "${AGENT_ENV}"
+  chown root:quota-dns-router "${AGENT_ENV}"
+  chmod 0640 "${AGENT_ENV}"
 }
 
 write_service() {
@@ -670,6 +730,9 @@ check_service() {
 
 validate_required_inputs() {
   if [ -z "$JOIN_CODE" ]; then
+    if [ "$EXISTING_INSTALL" -eq 1 ] && [ -f "$AGENT_ENV" ]; then
+      return 0
+    fi
     echo "缺少 --join <code>。请先在 Telegram 执行 /agent install <节点名> 生成安装命令。" >&2
     return 1
   fi
@@ -708,6 +771,7 @@ install_agent_binary_mode() {
   step "[1/7] 检查系统环境"
   require_root
   detect_linux_arch >/dev/null
+  prepare_upgrade_context
   ensure_binary_disk_space
 
   step "[2/7] 安装最小依赖"
@@ -737,6 +801,7 @@ install_agent_source_mode() {
   step "[1/8] 检查系统环境"
   require_root
   detect_linux_arch >/dev/null
+  prepare_upgrade_context
   ensure_source_disk_space
 
   step "[2/8] 安装源码构建依赖"
@@ -801,6 +866,8 @@ finish_message() {
 
 main() {
   normalize_install_mode
+  detect_existing_install
+  load_existing_agent_defaults
   validate_required_inputs
 
   case "$INSTALL_MODE" in
