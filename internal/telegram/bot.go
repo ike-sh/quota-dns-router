@@ -88,8 +88,13 @@ type ReplyMarkup struct {
 }
 
 type InlineKeyboardButton struct {
-	Text         string `json:"text"`
-	CallbackData string `json:"callback_data,omitempty"`
+	Text         string          `json:"text"`
+	CallbackData string          `json:"callback_data,omitempty"`
+	CopyText     *CopyTextButton `json:"copy_text,omitempty"`
+}
+
+type CopyTextButton struct {
+	Text string `json:"text"`
 }
 
 func NewBot(token string, adminID int64, client HTTPClient) *Bot {
@@ -264,9 +269,9 @@ func (b *Bot) postResult(ctx context.Context, path string, payload any, result a
 		return err
 	}
 	var generic struct {
-		OK          bool   `json:"ok"`
+		OK          bool            `json:"ok"`
 		Result      json.RawMessage `json:"result"`
-		Description string `json:"description"`
+		Description string          `json:"description"`
 	}
 	if err := json.Unmarshal(respBody, &generic); err != nil {
 		return err

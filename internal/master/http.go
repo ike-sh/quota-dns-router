@@ -16,6 +16,7 @@ import (
 type HTTPServer struct {
 	Store        *db.Store
 	PublicAPIURL string
+	Service      *Service
 }
 
 func (s HTTPServer) Handler() http.Handler {
@@ -85,6 +86,7 @@ func (s HTTPServer) report(w http.ResponseWriter, r *http.Request) {
 	if req.PublicIP == "" {
 		req.PublicIP = "unknown"
 	}
+	previous, _ := s.Store.GetNodeByAgentID(r.Context(), req.AgentID)
 	err = s.Store.SaveAgentReport(r.Context(), db.AgentReport{
 		AgentID:      req.AgentID,
 		Hostname:     req.Hostname,
@@ -102,6 +104,11 @@ func (s HTTPServer) report(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "保存上报失败", http.StatusInternalServerError)
 		return
 	}
+	if s.Service != nil && previous.ID != "" {
+		if current, nodeErr := s.Store.GetNodeByID(r.Context(), previous.ID); nodeErr == nil {
+			_ = s.Service.HandleAgentRecovery(r.Context(), previous, current)
+		}
+	}
 	writeJSON(w, api.AgentReportResponse{Accepted: true, Message: "ok"})
 }
 
@@ -118,10 +125,10 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func StartHTTP(ctx context.Context, cfg config.MasterConfig, store *db.Store) error {
+func StartHTTP(ctx context.Context, cfg config.MasterConfig, store *db.Store, service *Service) error {
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
-		Handler: HTTPServer{Store: store, PublicAPIURL: cfg.PublicAPIURL}.Handler(),
+		Handler: HTTPServer{Store: store, PublicAPIURL: cfg.PublicAPIURL, Service: service}.Handler(),
 	}
 	errCh := make(chan error, 1)
 	go func() {

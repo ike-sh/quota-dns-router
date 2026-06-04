@@ -293,6 +293,8 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 		return true, c.handlePolicyModeChoice(ctx, chatID, mode)
 	case data == "policy_toggle_auto":
 		return true, c.togglePolicyAutoSwitch(ctx, chatID)
+	case strings.HasPrefix(data, "notify_"):
+		return true, c.sendPolicyPanel(ctx, chatID, "通知细分开关当前默认启用，后续版本会提供独立开关字段。\n\n")
 	case data == "agent":
 		return true, c.sendAgentPanel(ctx, chatID, c.replaceSession(chatID))
 	case strings.HasPrefix(data, "agent_node:"):
@@ -1519,6 +1521,12 @@ func (c *TelegramController) sendPolicyPanel(ctx context.Context, chatID int64, 
 	text += fmt.Sprintf("默认重置日：%d\n", policy.DefaultResetDay)
 	text += fmt.Sprintf("默认优先级：%d\n", defaultNodePriority)
 	text += "自动切换：" + ternaryText(policy.AutoSwitchEnabled, "启用", "关闭") + "\n\n"
+	text += "通知设置\n\n"
+	text += "流量阈值通知：启用\n"
+	text += "节点离线通知：启用\n"
+	text += "DNS 切换通知：启用\n"
+	text += "节点恢复通知：启用\n"
+	text += "没有可用目标通知：启用\n\n"
 	text += "这些默认值会用于新建节点。已有节点可以在节点详情中单独修改。"
 	return c.sendMessageOrEdit(ctx, chatID, text, policyPanelMenu())
 }
@@ -1630,7 +1638,7 @@ func (c *TelegramController) sendAgentInstallCommand(ctx context.Context, chatID
 	if len(preview.Missing) > 0 {
 		return c.sendMessageOrEdit(ctx, chatID, "生成 Agent 安装命令前还缺少："+strings.Join(preview.Missing, "、"), setupMenu())
 	}
-	return c.sendMessageOrEdit(ctx, chatID, formatAgentInstallMessage(preview), agentCommandMenu(nodeID, preview.DNSReady))
+	return c.sendMessageOrEdit(ctx, chatID, formatAgentInstallMessage(preview), agentCommandMenu(nodeID, preview.DNSReady, preview.Command))
 }
 
 func (c *TelegramController) sendPureAgentInstallCommand(ctx context.Context, chatID int64, nodeID string) error {
@@ -1946,6 +1954,11 @@ func policyPanelMenu() *telegram.ReplyMarkup {
 		{{Text: "修改统计模式", CallbackData: "policy_mode"}},
 		{{Text: "修改默认重置日", CallbackData: "policy_reset_day"}},
 		{{Text: "开启/关闭自动切换", CallbackData: "policy_toggle_auto"}},
+		{{Text: "开关流量阈值通知", CallbackData: "notify_threshold"}},
+		{{Text: "开关离线通知", CallbackData: "notify_offline"}},
+		{{Text: "开关切换通知", CallbackData: "notify_switch"}},
+		{{Text: "开关恢复通知", CallbackData: "notify_recovered"}},
+		{{Text: "开关无目标通知", CallbackData: "notify_no_target"}},
 		{{Text: "返回主菜单", CallbackData: "menu"}},
 	}}
 }
@@ -1989,20 +2002,35 @@ func agentNodeMenu(nodes []db.NodeWithGroup) *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func agentCommandMenu(nodeID string, hasDNS bool) *telegram.ReplyMarkup {
-	rows := make([][]telegram.InlineKeyboardButton, 0, 6)
+func agentCommandMenu(nodeID string, hasDNS bool, installCommand string) *telegram.ReplyMarkup {
+	uninstallCommand := agentUninstallCommand()
+	rows := make([][]telegram.InlineKeyboardButton, 0, 8)
 	if !hasDNS {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "配置 DNS", CallbackData: "dns"}})
 	}
+	if copyText := copyTextButton(installCommand); copyText != nil {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "复制安装命令", CopyText: copyText}})
+	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "显示纯安装命令", CallbackData: "agent_copy:" + nodeID}})
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "重新生成命令", CallbackData: "agent_node:" + nodeID}})
+	if copyText := copyTextButton(uninstallCommand); copyText != nil {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "复制卸载命令", CopyText: copyText}})
+	}
 	rows = append(rows,
-		[]telegram.InlineKeyboardButton{{Text: "显示纯安装命令", CallbackData: "agent_copy:" + nodeID}},
-		[]telegram.InlineKeyboardButton{{Text: "重新生成命令", CallbackData: "agent_node:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "显示纯卸载命令", CallbackData: "agent_uninstall_copy:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "安装排查", CallbackData: "agent_troubleshoot:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "返回节点详情", CallbackData: "nodes_view:" + nodeID}},
 		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
 	)
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
+}
+
+func copyTextButton(text string) *telegram.CopyTextButton {
+	text = strings.TrimSpace(text)
+	if text == "" || len([]rune(text)) > 256 {
+		return nil
+	}
+	return &telegram.CopyTextButton{Text: text}
 }
 
 func nodeDetailMenu(node db.Node, hasReported, online bool) *telegram.ReplyMarkup {

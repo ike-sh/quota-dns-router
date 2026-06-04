@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.10")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0-alpha.11")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.10")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0-alpha.11")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -207,6 +207,14 @@ func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
 		"uninstall-agent.sh) --yes --purge",
 	} {
 		assertContains(t, agent, want)
+	}
+}
+
+func TestInstallScriptsUseVersionedReleaseDownloads(t *testing.T) {
+	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
+		body := readScript(t, name)
+		assertContains(t, body, `VERSION="0.1.0-alpha.11"`)
+		assertContains(t, body, `release_base="${repo_no_git}/releases/download/v${VERSION}"`)
 	}
 }
 

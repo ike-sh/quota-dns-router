@@ -1055,6 +1055,60 @@ func (s *Store) RecordNotification(ctx context.Context, kind, targetRef, message
 	return err
 }
 
+func (s *Store) HasNotification(ctx context.Context, kind, targetRef string) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM notifications WHERE kind = ? AND target_ref = ?
+	`, kind, targetRef).Scan(&count)
+	return count > 0, err
+}
+
+func (s *Store) RecordNotificationOnce(ctx context.Context, kind, targetRef, message, status, errMsg string) (bool, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+	var count int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(1) FROM notifications WHERE kind = ? AND target_ref = ?
+	`, kind, targetRef).Scan(&count); err != nil {
+		return false, err
+	}
+	if count > 0 {
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		committed = true
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO notifications(id, kind, target_ref, message, status, error_message)
+		VALUES(?, ?, ?, ?, ?, ?)
+	`, NewID("ntf"), kind, targetRef, message, status, nullIfEmpty(errMsg)); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	committed = true
+	return true, nil
+}
+
+func (s *Store) UpdateNotificationStatus(ctx context.Context, kind, targetRef, status, errMsg string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE notifications
+		SET status = ?, error_message = ?
+		WHERE kind = ? AND target_ref = ?
+	`, status, nullIfEmpty(errMsg), kind, targetRef)
+	return err
+}
+
 func (s *Store) BuildStatusSummary(ctx context.Context, at time.Time) (StatusSummary, error) {
 	groups, err := s.ListGroups(ctx)
 	if err != nil {

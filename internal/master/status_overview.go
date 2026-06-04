@@ -189,6 +189,7 @@ func BuildLatestFailureSummary(ctx context.Context, store *db.Store) (StatusFail
 	}
 	addLastError(errorKeyAgentInstall, "Agent install/join 生成失败", "", 4)
 	addLastError(errorKeyAgentReportAuth, "Agent 上报鉴权失败", "", 5)
+	addLastError(errorKeyNotification, "Telegram 通知发送失败", "", 6)
 
 	if len(candidates) == 0 {
 		return StatusFailureSummary{}, nil

@@ -45,6 +45,13 @@ type SwitchDecision struct {
 	Triggered   bool
 }
 
+const (
+	switchReasonThreshold = "流量达到阈值"
+	switchReasonOffline   = "当前节点离线"
+	switchReasonDisabled  = "当前节点已禁用"
+	switchReasonNoAuto    = "当前节点不参与自动切换"
+)
+
 func NewService(store *db.Store, notifier TelegramNotifier, dns DNSProvider) *Service {
 	return &Service{
 		Store:    store,
@@ -85,9 +92,8 @@ func (s *Service) HandleGroup(ctx context.Context, groupID string) error {
 	if !decision.Triggered {
 		return nil
 	}
-	if s.Notifier != nil {
-		_ = s.Notifier.SendAdminMessage(ctx, thresholdMessage(decision))
-		_ = s.Store.RecordNotification(ctx, "threshold", decision.Group.ID, thresholdMessage(decision), "sent", "")
+	if decision.TriggerType == db.SwitchTriggerThreshold {
+		_, _ = s.notifyOnce(ctx, "threshold", thresholdNotificationTarget(decision.Current), thresholdMessage(decision), "")
 	}
 	policy, err := s.Store.GetPolicy(ctx)
 	if err != nil {
@@ -132,11 +138,8 @@ func (s *Service) BuildDecision(ctx context.Context, groupID string) (SwitchDeci
 	}
 	target, ok := SelectTarget(current.ID, nodes, policy, s.now())
 	if !ok {
-		if s.Notifier != nil {
-			msg := fmt.Sprintf("没有可用切换节点\n\n分组：%s\n当前节点：%s\n触发原因：%s", group.Name, current.Name, reason)
-			_ = s.Notifier.SendAdminMessage(ctx, msg)
-			_ = s.Store.RecordNotification(ctx, "no_target", group.ID, msg, "sent", "")
-		}
+		msg := noTargetMessage(group, current, reason, len(nodes), 0)
+		_, _ = s.notifyOnce(ctx, "no_target", noTargetNotificationTarget(group.ID, current, reason), msg, "")
 		return SwitchDecision{Group: group, Config: cfg, Current: current, Reason: reason, Triggered: false}, nil
 	}
 	return SwitchDecision{
@@ -185,18 +188,18 @@ func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db
 
 func reasonForSwitch(current db.NodeUsage, policy db.Policy, now time.Time) string {
 	if !current.Enabled {
-		return "当前节点已禁用"
+		return switchReasonDisabled
 	}
 	if !current.AutoSwitch {
-		return "当前节点不参与自动切换"
+		return switchReasonNoAuto
 	}
 	if !current.Online && current.LastReportedAt.Valid {
 		if now.Sub(current.LastReportedAt.Time) > time.Duration(policy.AgentOfflineSeconds)*time.Second {
-			return "当前节点离线"
+			return switchReasonOffline
 		}
 	}
 	if db.UsagePercent(current.UsedBytes, current.MonthlyQuotaBytes) >= float64(current.ThresholdPercent) {
-		return "流量达到阈值"
+		return switchReasonThreshold
 	}
 	return ""
 }
@@ -255,11 +258,8 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 		_ = s.Store.SetStatusNote(ctx, noteKeyDNSUpdate(decision.Group.ID), "❌ DNS 修改失败")
 		_ = s.Store.SaveLastError(ctx, errorKeyDNSUpdate(decision.Group.ID), err.Error(), cfg.APIToken)
 		_ = s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.TriggerType, decision.Reason, "failed", err.Error(), cfg.APIToken)
-		if s.Notifier != nil {
-			msg := switchFailedMessage(decision, err)
-			_ = s.Notifier.SendAdminMessage(ctx, msg)
-			_ = s.Store.RecordNotification(ctx, "switch_failed", decision.Group.ID, msg, "sent", "")
-		}
+		msg := switchFailedMessage(decision, err)
+		_ = s.notify(ctx, "switch_failed", decision.Group.ID, msg, sanitizedSwitchError(err))
 		return err
 	}
 	if err := s.Store.UpdateGroupCurrentNode(ctx, decision.Group.ID, decision.Target.ID); err != nil {
@@ -270,12 +270,104 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 	if err := s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.TriggerType, decision.Reason, "success", ""); err != nil {
 		return err
 	}
-	if s.Notifier != nil {
-		msg := switchOKMessage(decision)
-		_ = s.Notifier.SendAdminMessage(ctx, msg)
-		_ = s.Store.RecordNotification(ctx, "switch_ok", decision.Group.ID, msg, "sent", "")
+	msg := switchOKMessage(decision)
+	_ = s.notify(ctx, "switch_ok", decision.Group.ID, msg, "")
+	return nil
+}
+
+func (s *Service) CheckOfflineNodes(ctx context.Context) error {
+	policy, err := s.Store.GetPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	nodes, err := s.Store.ListNodes(ctx)
+	if err != nil {
+		return err
+	}
+	now := s.now()
+	for _, node := range nodes {
+		if !node.LastReportedAt.Valid {
+			continue
+		}
+		if now.Sub(node.LastReportedAt.Time) <= time.Duration(policy.AgentOfflineSeconds)*time.Second {
+			continue
+		}
+		if node.Online {
+			_ = s.Store.MarkNodeOffline(ctx, node.ID)
+			node.Online = false
+		}
+		cfg, _ := s.Store.GetCloudflareConfigByGroupID(ctx, node.GroupID)
+		msg := offlineMessage(node, cfg, policy, now)
+		target := offlineNotificationTarget(node.ID, node.LastReportedAt.Time)
+		_, _ = s.notifyOnce(ctx, "offline", target, msg, "")
 	}
 	return nil
+}
+
+func (s *Service) HandleAgentRecovery(ctx context.Context, previous, current db.Node) error {
+	if !previous.LastReportedAt.Valid {
+		return nil
+	}
+	policy, err := s.Store.GetPolicy(ctx)
+	if err != nil {
+		return err
+	}
+	if previous.Online && s.now().Sub(previous.LastReportedAt.Time) <= time.Duration(policy.AgentOfflineSeconds)*time.Second {
+		return nil
+	}
+	group, err := s.Store.GetGroupByID(ctx, current.GroupID)
+	if err != nil {
+		return err
+	}
+	target := offlineNotificationTarget(previous.ID, previous.LastReportedAt.Time)
+	hadOfflineNotification, err := s.Store.HasNotification(ctx, "offline", target)
+	if err != nil || !hadOfflineNotification {
+		return err
+	}
+	msg := recoveredMessage(current, group)
+	_, _ = s.notifyOnce(ctx, "recovered", target, msg, "")
+	return nil
+}
+
+func (s *Service) notify(ctx context.Context, kind, targetRef, message, errMsg string) error {
+	status := "sent"
+	if s.Notifier != nil {
+		if err := s.Notifier.SendAdminMessage(ctx, message); err != nil {
+			status = "failed"
+			if errMsg == "" {
+				errMsg = err.Error()
+			}
+			errMsg = sanitizeStatusMessage(errMsg)
+			_ = s.Store.SaveLastError(ctx, errorKeyNotification, errMsg)
+		} else {
+			_ = s.Store.ClearLastError(ctx, errorKeyNotification)
+		}
+	}
+	return s.Store.RecordNotification(ctx, kind, targetRef, message, status, errMsg)
+}
+
+func (s *Service) notifyOnce(ctx context.Context, kind, targetRef, message, errMsg string) (bool, error) {
+	inserted, err := s.Store.RecordNotificationOnce(ctx, kind, targetRef, message, "pending", errMsg)
+	if err != nil || !inserted {
+		return inserted, err
+	}
+	status := "sent"
+	if s.Notifier != nil {
+		if err := s.Notifier.SendAdminMessage(ctx, message); err != nil {
+			status = "failed"
+			if errMsg == "" {
+				errMsg = err.Error()
+			}
+			errMsg = sanitizeStatusMessage(errMsg)
+			_ = s.Store.SaveLastError(ctx, errorKeyNotification, errMsg)
+		} else {
+			_ = s.Store.ClearLastError(ctx, errorKeyNotification)
+		}
+	}
+	if err := s.Store.UpdateNotificationStatus(ctx, kind, targetRef, status, errMsg); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 func inCooldown(group db.Group, now time.Time) bool {
@@ -286,24 +378,30 @@ func inCooldown(group db.Group, now time.Time) bool {
 }
 
 func thresholdMessage(d SwitchDecision) string {
+	usagePercent := db.UsagePercent(d.Current.UsedBytes, d.Current.MonthlyQuotaBytes)
+	switchNote := "自动切换：准备选择可用节点"
+	if strings.TrimSpace(d.Target.ID) != "" {
+		switchNote = fmt.Sprintf("自动切换：准备切换到 %s / %s", d.Target.Name, d.Target.PublicIP)
+	}
 	return fmt.Sprintf(
-		"⚠️ 流量阈值触发\n\n分组：%s\n当前节点：%s\n统计模式：%s\n月总量：%s\n已使用：%s\n阈值：%d%%\n当前 DNS：%s -> %s\n\n准备切换到：%s / %s",
+		"⚠️ 流量阈值触发\n\n分组：%s\n节点：%s\n统计模式：%s\n月总量：%s\n已使用：%s\n使用率：%.1f%%\n阈值：%d%%\nDNS：%s\n当前解析 IP：%s\n\n%s",
 		d.Group.Name,
 		d.Current.Name,
 		modeLabel(d.Current.TrafficMode),
 		humanBytes(d.Current.MonthlyQuotaBytes),
 		humanBytes(d.Current.UsedBytes),
+		usagePercent,
 		d.Current.ThresholdPercent,
 		d.Config.RecordName,
 		d.Current.PublicIP,
-		d.Target.Name,
-		d.Target.PublicIP,
+		switchNote,
 	)
 }
 
 func switchOKMessage(d SwitchDecision) string {
 	return fmt.Sprintf(
-		"✅ DNS 已切换\n\n分组：%s\n域名：%s\n旧节点：%s / %s\n新节点：%s / %s\nCloudflare 确认：成功",
+		"✅ DNS 自动切换成功\n\n触发原因：%s\n分组：%s\n域名：%s\n旧节点：%s / %s\n新节点：%s / %s\nCloudflare：已确认",
+		switchReasonLabel(d),
 		d.Group.Name,
 		d.Config.RecordName,
 		d.Current.Name,
@@ -315,26 +413,111 @@ func switchOKMessage(d SwitchDecision) string {
 
 func switchFailedMessage(d SwitchDecision, err error) string {
 	return fmt.Sprintf(
-		"❌ DNS 切换失败\n\n分组：%s\n域名：%s\n旧节点：%s / %s\n目标节点：%s / %s\n原因：%s",
+		"❌ DNS 自动切换失败\n\n触发原因：%s\n分组：%s\n域名：%s\n目标节点：%s / %s\n错误：%s",
+		switchReasonLabel(d),
 		d.Group.Name,
 		d.Config.RecordName,
-		d.Current.Name,
-		d.Current.PublicIP,
 		d.Target.Name,
 		d.Target.PublicIP,
-		err.Error(),
+		sanitizedSwitchError(err),
 	)
 }
 
 func switchTriggerTypeForReason(reason string) string {
 	switch strings.TrimSpace(reason) {
-	case "当前节点离线":
+	case switchReasonOffline:
 		return db.SwitchTriggerOffline
-	case "当前节点已禁用", "当前节点不参与自动切换":
+	case switchReasonDisabled, switchReasonNoAuto:
 		return db.SwitchTriggerDisabled
 	default:
 		return db.SwitchTriggerThreshold
 	}
+}
+
+func noTargetMessage(group db.Group, current db.NodeUsage, reason string, nodeCount, availableTargets int) string {
+	return fmt.Sprintf(
+		"⚠️ 没有可用切换目标\n\n分组：%s\n当前节点：%s\n原因：%s\n节点总数：%d\n可用目标：%d\n\n请添加新节点或调整节点策略。",
+		group.Name,
+		current.Name,
+		noTargetReasonLabel(reason),
+		nodeCount,
+		availableTargets,
+	)
+}
+
+func offlineMessage(node db.NodeWithGroup, cfg db.CloudflareConfig, policy db.Policy, now time.Time) string {
+	offlineMinutes := int(now.Sub(node.LastReportedAt.Time).Minutes())
+	if offlineMinutes < 1 {
+		offlineMinutes = 1
+	}
+	return fmt.Sprintf(
+		"🔴 节点离线\n\n节点：%s\n分组：%s\n最后上报：%s\n离线时长：%d 分钟\n当前 DNS：%s -> %s\n\n自动切换：%s",
+		node.Name,
+		node.GroupName,
+		node.LastReportedAt.Time.Local().Format("2006-01-02 15:04:05"),
+		offlineMinutes,
+		valueOrDash(cfg.RecordName),
+		node.PublicIP,
+		ternaryText(policy.AutoSwitchEnabled && node.AutoSwitch, "启用", "关闭"),
+	)
+}
+
+func recoveredMessage(node db.Node, group db.Group) string {
+	return fmt.Sprintf(
+		"🟢 节点恢复在线\n\n节点：%s\n分组：%s\n当前公网 IP：%s",
+		node.Name,
+		group.Name,
+		node.PublicIP,
+	)
+}
+
+func thresholdNotificationTarget(node db.NodeUsage) string {
+	return node.ID + ":" + node.CycleStart
+}
+
+func noTargetNotificationTarget(groupID string, current db.NodeUsage, reason string) string {
+	target := groupID + ":" + current.ID + ":" + switchTriggerTypeForReason(reason)
+	switch switchTriggerTypeForReason(reason) {
+	case db.SwitchTriggerThreshold:
+		return target + ":" + current.CycleStart
+	case db.SwitchTriggerOffline:
+		if current.LastReportedAt.Valid {
+			return target + ":" + current.LastReportedAt.Time.UTC().Format(time.RFC3339Nano)
+		}
+	}
+	return target
+}
+
+func offlineNotificationTarget(nodeID string, lastReportedAt time.Time) string {
+	return nodeID + ":" + lastReportedAt.UTC().Format(time.RFC3339Nano)
+}
+
+func switchReasonLabel(d SwitchDecision) string {
+	switch d.TriggerType {
+	case db.SwitchTriggerOffline:
+		return "节点离线"
+	case db.SwitchTriggerManual:
+		return "手动切换"
+	case db.SwitchTriggerDisabled:
+		return "节点禁用"
+	default:
+		return "流量阈值"
+	}
+}
+
+func noTargetReasonLabel(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case switchReasonThreshold:
+		return "当前节点达到流量阈值"
+	case switchReasonOffline:
+		return "当前节点离线"
+	default:
+		return reason
+	}
+}
+
+func sanitizedSwitchError(err error) string {
+	return sanitizeStatusMessage(friendlyCloudflareError(err))
 }
 
 func humanBytes(v int64) string {

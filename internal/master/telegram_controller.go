@@ -1219,8 +1219,8 @@ func formatAgentInstallMessage(preview agentInstallPreview) string {
 			b.WriteString(line + "\n")
 		}
 	}
-	b.WriteString("\n请点击“显示纯安装命令”后长按复制。\n")
-	b.WriteString("需要卸载时，可点击“显示纯卸载命令”。\n\n")
+	b.WriteString("\n请点击下面按钮复制安装命令。\n")
+	b.WriteString("如果客户端不支持复制按钮，可点击“显示纯安装命令”。\n\n")
 	b.WriteString("join code 有效期：30 分钟")
 	if !preview.ExpiresAt.IsZero() {
 		b.WriteString("（到 " + preview.ExpiresAt.Local().Format("2006-01-02 15:04:05") + "）")

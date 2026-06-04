@@ -1014,7 +1014,7 @@ func TestAgentWizardWarnsWhenDNSMissing(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"显示纯安装命令", "显示纯卸载命令", "30 分钟", "当前分组还没有 DNS A 记录", "节点：hk-01", "分组：hk", "Master：https://example.com"} {
+	for _, want := range []string{"复制安装命令", "显示纯安装命令", "复制卸载命令", "显示纯卸载命令", "copy_text", "30 分钟", "当前分组还没有 DNS A 记录", "节点：hk-01", "分组：hk", "Master：https://example.com"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected install command payload to contain %q, got %v", want, rec.payloads)
 		}
@@ -1051,7 +1051,7 @@ func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
 		t.Fatal(err)
 	}
-	if !rec.contains("显示纯安装命令") {
+	if !rec.contains("复制安装命令") || !rec.contains("显示纯安装命令") {
 		t.Fatalf("expected copy button in agent command menu, got %v", rec.payloads)
 	}
 	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
@@ -1079,6 +1079,53 @@ func TestAgentWizardCanSendPureCommand(t *testing.T) {
 	third := strings.TrimSpace(rec.messages[len(rec.messages)-1])
 	if third == first {
 		t.Fatalf("expected explicit regenerate to create a fresh command, got %q", third)
+	}
+}
+
+func TestAgentCopyTextButtonDoesNotRegisterCallback(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	if err := controller.Store.SetMasterPublicURL(ctx, "https://example.com"); err != nil {
+		t.Fatal(err)
+	}
+	group, err := controller.Store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := controller.Store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000 * 1024 * 1024 * 1024,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "agent_node:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	payload := strings.Join(rec.payloads, "\n")
+	if !strings.Contains(payload, `"text":"复制安装命令"`) || !strings.Contains(payload, `"copy_text"`) {
+		t.Fatalf("expected copy_text install button, got %v", rec.payloads)
+	}
+	if strings.Contains(payload, `"text":"复制安装命令","callback_data"`) {
+		t.Fatalf("copy_text button should not have callback_data: %s", payload)
+	}
+	before := rec.countPath("/sendMessage")
+	if err := controller.handleCallback(ctx, 1, "agent_copy:"+node.ID); err != nil {
+		t.Fatal(err)
+	}
+	afterFallback := rec.countPath("/sendMessage")
+	if afterFallback != before+1 {
+		t.Fatalf("expected fallback pure command callback to send one message, before=%d after=%d", before, afterFallback)
 	}
 }
 

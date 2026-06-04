@@ -13,6 +13,7 @@ const (
 	errorKeyCloudflareZone  = "cloudflare_zone_lookup"
 	errorKeyAgentInstall    = "agent_install_command"
 	errorKeyAgentReportAuth = "agent_report_auth"
+	errorKeyNotification    = "notification_delivery"
 	noteKeyCloudflareZone   = "cloudflare_zone_result"
 )
 

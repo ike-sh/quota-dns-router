@@ -68,8 +68,9 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 	_ = runtime.Bot.SendAdminMessage(ctx, "quota-dns-router Master 已启动。发送 /start 继续初始化配置。")
 
 	errCh := make(chan error, 3)
+	svc := NewService(runtime.Store, runtime.Bot, runtime.DNS)
 	go func() {
-		errCh <- StartHTTP(ctx, cfg, runtime.Store)
+		errCh <- StartHTTP(ctx, cfg, runtime.Store, svc)
 	}()
 	go func() {
 		if me, err := runtime.Bot.GetMe(ctx); err == nil {
@@ -86,7 +87,6 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 		errCh <- controller.Run(ctx)
 	}()
 	go func() {
-		svc := NewService(runtime.Store, runtime.Bot, runtime.DNS)
 		ticker := time.NewTicker(cfg.CheckInterval)
 		defer ticker.Stop()
 		for {
@@ -95,6 +95,9 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 				errCh <- ctx.Err()
 				return
 			case <-ticker.C:
+				if err := svc.CheckOfflineNodes(ctx); err != nil {
+					fmt.Fprintf(os.Stderr, "离线检查失败：%v\n", err)
+				}
 				if err := svc.EvaluateAndSwitchAll(ctx); err != nil {
 					fmt.Fprintf(os.Stderr, "自动检查失败：%v\n", err)
 				}

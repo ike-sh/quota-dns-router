@@ -1,10 +1,14 @@
 package master
 
 import (
+	"context"
 	"database/sql"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"quota-dns-router-go/internal/cloudflare"
 	"quota-dns-router-go/internal/db"
 )
 
@@ -47,4 +51,281 @@ func TestReasonForSwitchThreshold(t *testing.T) {
 	if reason := reasonForSwitch(current, policy, time.Now()); reason == "" {
 		t.Fatal("expected threshold reason")
 	}
+}
+
+func TestThresholdNotificationDedupesWithinCycleAndResetsNextCycle(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
+	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.GetPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.NotifyOnly = true
+	if err := store.SavePolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.BindAgentToNode(ctx, oldNode.ID, "agent-old")
+	_ = store.BindAgentToNode(ctx, newNode.ID, "agent-new")
+	_ = store.SaveAgentReport(ctx, reportFor("agent-old", oldNode.PublicIP, 900, now))
+	_ = store.SaveAgentReport(ctx, reportFor("agent-new", newNode.PublicIP, 100, now))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: oldNode.PublicIP, TTL: 60},
+	})
+	svc.Now = func() time.Time { return now }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "流量阈值触发"); got != 1 {
+		t.Fatalf("expected one threshold notification in same cycle, got %d: %v", got, notifier.messages)
+	}
+	nextCycle := time.Date(2026, 7, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.SaveAgentReport(ctx, reportFor("agent-old", oldNode.PublicIP, 900, nextCycle))
+	_ = store.SaveAgentReport(ctx, reportFor("agent-new", newNode.PublicIP, 100, nextCycle))
+	svc.Now = func() time.Time { return nextCycle }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "流量阈值触发"); got != 2 {
+		t.Fatalf("expected threshold notification to trigger in next cycle, got %d: %v", got, notifier.messages)
+	}
+}
+
+func TestNoTargetNotificationDedupes(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true)
+	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
+	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 900, now))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: node.PublicIP, TTL: 60},
+	})
+	svc.Now = func() time.Time { return now }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "没有可用切换目标"); got != 1 {
+		t.Fatalf("expected one no-target notification, got %d: %v", got, notifier.messages)
+	}
+}
+
+func TestOfflineAndRecoveryNotifications(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true)
+	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
+	firstReport := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 100, firstReport))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{})
+	svc.Now = func() time.Time { return firstReport.Add(10 * time.Minute) }
+	if err := svc.CheckOfflineNodes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CheckOfflineNodes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "节点离线"); got != 1 {
+		t.Fatalf("expected one offline notification, got %d: %v", got, notifier.messages)
+	}
+	previous, err := store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredAt := firstReport.Add(11 * time.Minute)
+	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 100, recoveredAt))
+	current, err := store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Now = func() time.Time { return recoveredAt }
+	if err := svc.HandleAgentRecovery(ctx, previous, current); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "节点恢复在线"); got != 1 {
+		t.Fatalf("expected one recovery notification, got %d: %v", got, notifier.messages)
+	}
+}
+
+func TestNeverReportedNodeDoesNotSendOfflineNotification(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{})
+	if err := svc.CheckOfflineNodes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.messages) != 0 {
+		t.Fatalf("expected no offline notification for never-reported node, got %v", notifier.messages)
+	}
+}
+
+func TestSwitchFailureNotificationIsSanitized(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
+	if err := store.SaveCloudflareDefaults(ctx, "cf_secret_abcd", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{updateErr: errors.New("Cloudflare failed token=cf_secret_abcd")})
+	decision := SwitchDecision{
+		Group:       group,
+		Config:      db.CloudflareConfig{GroupID: group.ID, APIToken: "cf_secret_abcd", ZoneName: "example.com", ZoneID: "zone-1", RecordName: "hk.example.com", RecordID: "rec-1", TTL: 60},
+		Current:     db.NodeUsage{Node: oldNode},
+		Target:      db.NodeUsage{Node: newNode},
+		TriggerType: db.SwitchTriggerThreshold,
+		Reason:      switchReasonThreshold,
+		Triggered:   true,
+	}
+	if err := svc.ExecuteSwitch(ctx, decision); err == nil {
+		t.Fatal("expected switch failure")
+	}
+	payload := strings.Join(notifier.messages, "\n")
+	if !strings.Contains(payload, "DNS 自动切换失败") {
+		t.Fatalf("expected failure notification, got %v", notifier.messages)
+	}
+	if strings.Contains(payload, "cf_secret_abcd") {
+		t.Fatalf("expected token to be sanitized, got %s", payload)
+	}
+}
+
+func TestNotificationFailureRecordsLastErrorWithoutBlocking(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	notifier := &fakeNotifier{err: errors.New("telegram token=bot_secret failed")}
+	svc := NewService(store, notifier, fakeDNS{})
+	if err := svc.notify(ctx, "test", "target", "hello", ""); err != nil {
+		t.Fatal(err)
+	}
+	item, err := store.GetLastError(ctx, errorKeyNotification)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Message == "" {
+		t.Fatal("expected notification failure last_error")
+	}
+	if strings.Contains(item.Message, "bot_secret") {
+		t.Fatalf("expected notification error to be sanitized, got %q", item.Message)
+	}
+}
+
+func reportFor(agentID, publicIP string, used int64, at time.Time) db.AgentReport {
+	return db.AgentReport{
+		AgentID:      agentID,
+		Hostname:     "host",
+		PublicIP:     publicIP,
+		Iface:        "eth0",
+		RXBytesTotal: used,
+		TXBytesTotal: 0,
+		RXDelta:      used,
+		TXDelta:      0,
+		ReportedAt:   at,
+		AgentVersion: "test",
+		Status:       "online",
+	}
+}
+
+func countMessagesContaining(messages []string, needle string) int {
+	count := 0
+	for _, message := range messages {
+		if strings.Contains(message, needle) {
+			count++
+		}
+	}
+	return count
+}
+
+type fakeNotifier struct {
+	messages []string
+	err      error
+}
+
+func (n *fakeNotifier) SendAdminMessage(ctx context.Context, text string) error {
+	n.messages = append(n.messages, text)
+	return n.err
 }

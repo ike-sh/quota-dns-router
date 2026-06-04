@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.1.0-alpha.11
+
+- Telegram Agent 安装页新增 `copy_text` 复制安装/卸载命令按钮，旧客户端继续保留“显示纯安装命令 / 显示纯卸载命令”fallback；复制和显示纯命令都不会刷新 join code，只有“重新生成命令”刷新。
+- 补齐流量阈值、节点离线、节点恢复、DNS 自动切换成功/失败、无可用切换目标 Telegram 通知，并基于 `notifications` 表去重，避免同一周期或同一离线状态反复刷屏。
+- `/policy` 增加通知设置状态展示和通知开关占位入口，当前细分通知默认启用。
+- 继续确认主菜单“手动切换”进入按钮向导并写入 `dns_switch_history trigger_type=manual`，`/dns set` help 保持包含 `<A记录>`。
+- 版本升级到 `0.1.0-alpha.11`，同步更新安装脚本、README 和测试。
+
 ## 0.1.0-alpha.10
 
 - Telegram 的 pending prompt 统一改为可追踪的编辑/删除流程，Cloudflare Token、Zone Name、DNS TTL、DNS A 记录、分组、节点名、节点 IP 和策略输入在成功或 `/cancel` 后都会清理提示消息。
