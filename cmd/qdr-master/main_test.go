@@ -45,7 +45,7 @@ func TestMasterVersionOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	want := "quota-dns-router master 0.1.0-rc.1"
+	want := "quota-dns-router master 0.1.0"
 	if strings.TrimSpace(got) != want {
 		t.Fatalf("got %q want %q", strings.TrimSpace(got), want)
 	}
@@ -83,7 +83,7 @@ func TestCLIStatusAndConfigCheckIncludeSwitchAndRisk(t *testing.T) {
 		PreferredIface:        "auto",
 		ReportIntervalSeconds: 60,
 	})
-	_ = store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "203.0.113.10", "198.51.100.10", db.SwitchTriggerManual, "测试切换", "success", "")
+	_ = store.RecordSwitchHistory(ctx, group.ID, oldNode.ID, newNode.ID, "hk.example.com", "203.0.113.10", "198.51.100.10", db.SwitchTriggerManual, "手动切换", "success", "")
 
 	overview, err := master.BuildStatusOverview(ctx, store, "http://127.0.0.1:8080", nil, time.Now())
 	if err != nil {

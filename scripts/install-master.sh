@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0-rc.1"
+VERSION="0.1.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -10,7 +10,7 @@ UNIT="/etc/systemd/system/quota-dns-router-master.service"
 BIN_NAME="qdr-master"
 MASTER_ENV="${ETC_DIR}/master.env"
 REPO="${QDR_REPO:-https://github.com/ike-sh/quota-dns-router}"
-BRANCH="${QDR_BRANCH:-main}"
+BRANCH="${QDR_BRANCH:-v${VERSION}}"
 GO_VERSION="${QDR_GO_VERSION:-1.25.0}"
 MIN_GO_VERSION="${QDR_MIN_GO_VERSION:-1.25.0}"
 INSTALL_MODE="${QDR_INSTALL_MODE:-binary}"
@@ -47,7 +47,7 @@ usage() {
   QDR_INSTALL_MODE           安装模式：binary / source / auto，默认 binary
   QDR_ALLOW_SOURCE_FALLBACK  auto + --yes 时允许失败后继续 source，设为 1 开启
   QDR_REPO                   GitHub 仓库，默认 https://github.com/ike-sh/quota-dns-router
-  QDR_BRANCH                 Git 分支，默认 main
+  QDR_BRANCH                 Git 分支或标签，默认 v0.1.0
   QDR_GO_VERSION             官方 Go tarball 版本，默认 1.25.0
 EOF
 }
@@ -397,7 +397,7 @@ install_official_go() {
     echo "[dry-run] curl -fL --retry 3 --connect-timeout 10 -o \"\$GO_TMP/go.tgz\" ${url}"
     echo "[dry-run] mkdir -p \"\$GO_TMP/extract\""
     echo "[dry-run] tar -C \"\$GO_TMP/extract\" -xzf \"\$GO_TMP/go.tgz\""
-    echo "[dry-run] test -x \"\$GO_TMP/extract/go/bin/go\""
+    echo "[dry-run] [ -x \"\$GO_TMP/extract/go/bin/go\" ]"
     echo "[dry-run] rm -rf /usr/local/go"
     echo "[dry-run] mv \"\$GO_TMP/extract/go\" /usr/local/go"
     return 0
@@ -553,7 +553,7 @@ install_master_from_release() {
     echo "[dry-run] 校验 ${package_name} 的 SHA256"
     echo "[dry-run] mkdir -p \"\$TMP/extract\""
     echo "[dry-run] tar -C \"\$TMP/extract\" -xzf \"\$TMP/${package_name}\""
-    echo "[dry-run] test -x \"\$TMP/extract/${BIN_NAME}\""
+    echo "[dry-run] [ -x \"\$TMP/extract/${BIN_NAME}\" ]"
     echo "[dry-run] install -m 0755 \"\$TMP/extract/${BIN_NAME}\" ${PREFIX}/${BIN_NAME}"
     echo "[dry-run] ${PREFIX}/${BIN_NAME} version"
     return 0
@@ -860,9 +860,9 @@ finish_message() {
   echo "CLI 诊断：qdr-master status"
   echo "配置检查：qdr-master config-check"
   echo "卸载 Master："
-  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes"
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v${VERSION}/scripts/uninstall-master.sh) --yes"
   echo "完全清理 Master："
-  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge"
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v${VERSION}/scripts/uninstall-master.sh) --yes --purge"
 }
 
 main() {

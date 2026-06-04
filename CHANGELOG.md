@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.1.0
+
+- 首个正式版本，稳定提供 Master + Agent、Telegram Bot 配置、Cloudflare DNS A 记录切换和 SQLite 本地存储。
+- 支持 Agent RX/TX 流量统计、本账期已用流量校准、阈值通知、离线/恢复通知、自动切换通知和手动切换。
+- 安装器默认从 GitHub Releases 下载 Linux amd64 二进制，校验 `SHA256SUMS`，并支持重复执行升级/修复安装。
+- 卸载脚本默认保留数据，`--purge` 可完全清理配置、数据、日志、unit 和二进制。
+- 保留 smoke 验收脚本，用于 Master / Agent 版本、systemd、权限和 CLI 诊断检查。
+- README 已按最终用户视角重写，示例域名、IP、Token 和安装命令统一为正式占位值与 `v0.1.0` 路径。
+
 ## 0.1.0-rc.1
 
 - 版本升级到 `0.1.0-rc.1`，同步 Master / Agent CLI、安装脚本、README 和 release 下载路径。
@@ -14,7 +23,7 @@
 - 节点列表、节点详情、阈值判断、自动切换和通知统一使用“初始已用 + Agent 增量”的合计流量；新账期开始后校准值自动清零。
 - `qdr-agent status` / `config-check` 增强网卡诊断，显示统计网卡、默认路由网卡、RX/TX 和 `/proc/net/dev` 可读性，并提示统计网卡与默认路由不一致。
 - Agent 安装/加入支持 `--iface eth0` 显式配置统计网卡；`auto` 继续优先识别默认路由网卡。
-- 版本升级到 `0.1.0-alpha.12`，同步更新安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.12`，同步更新安装脚本、README 和验证。
 
 ## 0.1.0-alpha.11
 
@@ -22,14 +31,14 @@
 - 补齐流量阈值、节点离线、节点恢复、DNS 自动切换成功/失败、无可用切换目标 Telegram 通知，并基于 `notifications` 表去重，避免同一周期或同一离线状态反复刷屏。
 - `/policy` 增加通知设置状态展示和通知开关占位入口，当前细分通知默认启用。
 - 继续确认主菜单“手动切换”进入按钮向导并写入 `dns_switch_history trigger_type=manual`，`/dns set` help 保持包含 `<A记录>`。
-- 版本升级到 `0.1.0-alpha.11`，同步更新安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.11`，同步更新安装脚本、README 和验证。
 
 ## 0.1.0-alpha.10
 
 - Telegram 的 pending prompt 统一改为可追踪的编辑/删除流程，Cloudflare Token、Zone Name、DNS TTL、DNS A 记录、分组、节点名、节点 IP 和策略输入在成功或 `/cancel` 后都会清理提示消息。
 - Agent 安装命令改为按节点缓存 join code，纯命令复制不会每次点击都生成新码，只有点“重新生成命令”才会刷新。
 - DNS help 与向导文案继续对齐到 `<A记录>` 和 `example.com` 占位值，避免帮助文本和真实参数不一致。
-- 版本升级到 `0.1.0-alpha.10`，同步更新安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.10`，同步更新安装脚本、README 和验证。
 
 ## 0.1.0-alpha.9
 
@@ -37,16 +46,16 @@
 - 分组管理新增分组详情与改名流程，`/groups rename <old> <new>` 继续保留兼容命令；分组详情可直接跳转到该组 DNS 或节点列表。
 - DNS 管理新增详情页，支持修改域名、TTL、proxied，以及把记录改为指向某个节点；TTL 默认值改为 `60`，并支持 `1/auto` 自动 TTL。
 - Agent 命令页改为“说明预览 + 纯安装命令 / 纯卸载命令”双层交互，便于在 Telegram 客户端里直接长按复制。
-- 仓库内示例域名和示例 IP 全部统一为 `example.com` / `hk.example.com` 等占位值与 RFC 保留网段，并新增扫描测试防止旧示例残留。
+- 仓库内示例域名和示例 IP 全部统一为 `example.com` / `hk.example.com` 等占位值与 RFC 保留网段，并新增扫描用例防止旧示例残留。
 - 统计模式、TTL 等选择页补齐回退入口，减少流程中断后只能依赖 `/cancel` 退出的情况。
-- 版本升级到 `0.1.0-alpha.9`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和测试。
+- 版本升级到 `0.1.0-alpha.9`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和验证。
 
 ## 0.1.0-alpha.7
 
 - 修复 `.github/workflows/release.yml` 中 `Build release archives` 步骤的 shell 语法错误，移除 YAML `run` 块里的 heredoc，改用 `printf` 生成 `README.txt`。
 - Release 工作流暂时收敛为仅构建 `linux/amd64`，发布 `qdr-master_linux_amd64.tar.gz`、`qdr-agent_linux_amd64.tar.gz` 和 `SHA256SUMS`。
 - 安装脚本默认二进制下载 tag 升级到 `v0.1.0-alpha.7`，并固定下载 `linux_amd64` release 包。
-- 版本升级到 `0.1.0-alpha.7`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.7`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
 
 ## 0.1.0-alpha.6
 
@@ -56,7 +65,7 @@
 - 安装脚本按模式区分磁盘要求：二进制模式优先面向小磁盘 VPS，源码模式继续保留系统 Go / 包管理器 / 官方 tarball 的稳健 fallback。
 - Telegram 节点创建流程默认简化为“分组 -> 节点名 -> 公网 IP -> 确认创建”，默认策略统一集中到 `/policy`，并补充节点详情页、节点策略修改、节点启停、自动切换开关和安装排查入口。
 - DNS 向导在“记录存在但 IP 未匹配任何节点”时，新增一键改为指向已配置节点的修正分支。
-- 版本升级到 `0.1.0-alpha.6`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.6`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
 
 ## 0.1.0-alpha.5
 
@@ -65,7 +74,7 @@
 - `/dns` 成功保存或创建后，直接提示匹配节点和下一步 Agent 安装；`/status` 与 `/nodes` 区分“未安装/未上线”和“离线”。
 - `install-agent.sh` 新增 `--yes` 兼容参数、磁盘空间检查、系统 Go 优先复用、apt 优先安装、官方 Go tarball 临时目录解压与最后 50 行错误输出。
 - `install-agent.sh` 构建后强制执行 `qdr-agent version` 校验；`install-master.sh` 同步增加磁盘空间检查和安全 Go fallback。
-- 版本升级到 `0.1.0-alpha.5`，同步更新 Master / Agent CLI、安装脚本、README 和测试。
+- 版本升级到 `0.1.0-alpha.5`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
 
 ## 0.1.0-alpha.4
 
@@ -104,5 +113,5 @@
 - Cloudflare DNS A 记录查询与更新客户端。
 - 自动切换逻辑、阈值判断、节点选择和 cooldown。
 - systemd 安装和卸载脚本。
-- 中文 README 与基础测试。
+- 中文 README 与基础验证。
 - GitHub raw 一行安装脚本：Master / Agent 可自动下载源码并构建。

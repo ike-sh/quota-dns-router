@@ -161,7 +161,7 @@ func TestCloudflareTokenSuccessShowsZoneButtons(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
 		zones: []cloudflare.Zone{
 			{ID: "zone-1", Name: "example.com"},
-			{ID: "zone-2", Name: "test.example.com"},
+			{ID: "zone-2", Name: "sg.example.com"},
 		},
 	})
 	if err := controller.handleCallback(context.Background(), 1, "cf_token"); err != nil {
@@ -173,7 +173,7 @@ func TestCloudflareTokenSuccessShowsZoneButtons(t *testing.T) {
 	if controller.sessions[1] != pendingCloudflareZoneSelect {
 		t.Fatalf("expected pending zone selection, got %q", controller.sessions[1])
 	}
-	for _, want := range []string{"example.com", "test.example.com", "手动输入 Zone Name"} {
+	for _, want := range []string{"example.com", "sg.example.com", "手动输入 Zone Name"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected payload to contain %q, got %v", want, rec.payloads)
 		}
@@ -184,7 +184,7 @@ func TestCloudflareZonePickSavesZone(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
 		zones: []cloudflare.Zone{
 			{ID: "zone-1", Name: "example.com"},
-			{ID: "zone-2", Name: "test.example.com"},
+			{ID: "zone-2", Name: "sg.example.com"},
 		},
 	})
 	ctx := context.Background()
@@ -201,7 +201,7 @@ func TestCloudflareZonePickSavesZone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if token == "" || zoneName != "test.example.com" || zoneID != "zone-2" {
+	if token == "" || zoneName != "sg.example.com" || zoneID != "zone-2" {
 		t.Fatalf("unexpected cloudflare defaults: token=%q zone=%q zoneID=%q", token, zoneName, zoneID)
 	}
 	if controller.sessions[1] != "" {

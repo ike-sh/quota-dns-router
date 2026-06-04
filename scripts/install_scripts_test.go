@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.1.0-rc.1")
+	assertContains(t, out, "quota-dns-router install-master 0.1.0")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.1.0-rc.1")
+	assertContains(t, out, "quota-dns-router install-agent 0.1.0")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -82,7 +82,7 @@ func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	masterOut := runBash(t, "QDR_INSTALL_MODE=source QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
 	for _, want := range []string{
 		"安装模式：source",
-		"来源：GitHub source main",
+		"来源：GitHub source v0.1.0",
 		"安装源码构建依赖",
 		"CGO_ENABLED=0 go build",
 		"尝试通过系统包管理器安装 Go",
@@ -92,7 +92,7 @@ func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	agentOut := runBash(t, "QDR_INSTALL_MODE=source bash install-agent.sh --join abc --master http://203.0.113.10:8080 --dry-run")
 	for _, want := range []string{
 		"安装模式：source",
-		"来源：GitHub source main",
+		"来源：GitHub source v0.1.0",
 		"安装源码构建依赖",
 		"CGO_ENABLED=0 go build",
 		"尝试通过系统包管理器安装 Go",
@@ -225,8 +225,9 @@ func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
 func TestInstallScriptsUseVersionedReleaseDownloads(t *testing.T) {
 	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
 		body := readScript(t, name)
-		assertContains(t, body, `VERSION="0.1.0-rc.1"`)
+		assertContains(t, body, `VERSION="0.1.0"`)
 		assertContains(t, body, `release_base="${repo_no_git}/releases/download/v${VERSION}"`)
+		assertContains(t, body, `/v${VERSION}/scripts/uninstall-`)
 	}
 }
 

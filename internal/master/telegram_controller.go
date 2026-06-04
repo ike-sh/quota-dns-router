@@ -729,7 +729,7 @@ func normalizeMode(v string) string {
 
 func installURL(policy db.Policy) string {
 	if policy.RepoInstallURL == "" {
-		return "https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh"
+		return "https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-agent.sh"
 	}
 	return policy.RepoInstallURL
 }
@@ -1284,7 +1284,7 @@ func formatNodeTrafficOffsetSavedMessage(node db.Node, usage db.NodeUsage) strin
 }
 
 func agentUninstallCommand() string {
-	return "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes"
+	return "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes"
 }
 
 func (c *TelegramController) sendNodeCreatedSummary(ctx context.Context, chatID int64, node db.Node) error {

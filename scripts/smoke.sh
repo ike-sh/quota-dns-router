@@ -24,16 +24,16 @@ check() {
 }
 
 check_file_exists() {
-  test -f "$1"
+  [ -f "$1" ]
 }
 
 check_dir_exists() {
-  test -d "$1"
+  [ -d "$1" ]
 }
 
 check_env_permissions() {
   local path="$1"
-  test -f "$path" || return 1
+  [ -f "$path" ] || return 1
   local mode
   mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
   case "$mode" in
@@ -44,7 +44,7 @@ check_env_permissions() {
 
 check_data_permissions() {
   local path="$1"
-  test -d "$path" || return 1
+  [ -d "$path" ] || return 1
   local mode
   mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
   case "$mode" in

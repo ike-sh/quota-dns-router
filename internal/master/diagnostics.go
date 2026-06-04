@@ -232,7 +232,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 					summary.Status = "✅ DNS 记录正常"
 					summary.LastResult = "✅ DNS 记录查询成功"
 					summary.LastError = "-"
-					summary.NextSuggestion = []string{"如需切换测试，可调整阈值或构造测试流量"}
+					summary.NextSuggestion = []string{"如需验收切换，可调整阈值或构造验收流量"}
 				}
 			}
 		}

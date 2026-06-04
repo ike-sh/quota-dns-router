@@ -1,581 +1,405 @@
 # quota-dns-router
 
-`quota-dns-router` 是一个面向 Linux 服务器的流量额度 DNS 切换工具。Master 通过 Telegram Bot 管理 Cloudflare、分组、节点和策略；Agent 安装在每台服务器上，统计 RX/TX 流量并上报。当当前 DNS 指向的节点达到阈值或不可用时，Master 自动把 Cloudflare DNS A 记录切换到同组下一台可用节点。
+quota-dns-router 是一个面向小型 VPS 节点池的 DNS 自动切换工具。它由 Master 和 Agent 两部分组成：Master 通过 Telegram Bot 提供配置入口，维护节点、分组、Cloudflare DNS A 记录和切换策略；Agent 安装在各个 VPS 上，定期上报 RX/TX 流量和在线状态。
 
-当前版本：`0.1.0-rc.1`
+当前版本：`0.1.0`
 
-本项目只实现核心能力：Telegram Bot long polling、SQLite、HTTP Agent API、Cloudflare A 记录管理、systemd 安装和卸载。不包含 Web UI、Webhook、Docker 管理、多 DNS 服务商或代理协议管理。当前 release 仅提供 `linux/amd64` 二进制，其他架构请使用 `QDR_INSTALL_MODE=source`。
+## 项目简介
 
-## 架构说明
+当一组 VPS 共用同一个业务域名时，你可以用 quota-dns-router 让 DNS A 记录指向当前可用节点。节点流量接近阈值、节点离线、或你手动指定切换目标时，Master 会通过 Cloudflare 更新对应 A 记录，并把结果发送到 Telegram。
 
-- Master：运行 `qdr-master run`，启动 HTTP API、Telegram Bot polling、自动检查任务。
-- Agent：运行 `qdr-agent run`，从 `/proc/net/dev` 读取网卡计数，持久化上次计数并上报 Master。
-- SQLite：Master 使用 `/var/lib/quota-dns-router/master.db`，启动时自动执行 migration。
-- Cloudflare：使用 API Token 管理 DNS A 记录。
-- Telegram：只有配置的管理员 ID 可以操作。
+项目设计目标是简单、可恢复、易排查：
 
-## Master 一键安装
+- 所有运行态数据保存在 Master 本地 SQLite。
+- Master 安装后只需要 Telegram Bot Token 和 Telegram 管理员 ID。
+- Cloudflare、DNS、分组、节点、策略和 Agent 安装命令都在 Telegram Bot 内完成。
+- Agent 默认只读取 Linux `/proc/net/dev`，不上报代理配置、业务端口或用户流量内容。
 
-推荐使用 raw 一行安装：
+## 适用场景
+
+- 多台 Linux amd64 VPS 共用一个 Cloudflare DNS A 记录。
+- 需要按月流量额度和阈值自动把域名切到备用节点。
+- 希望通过 Telegram 完成运维配置，而不是维护 Web 面板。
+- 需要清晰知道节点离线、恢复、阈值触发和 DNS 切换结果。
+
+不适合的场景：
+
+- 需要 Web UI 或多人权限管理。
+- 需要管理代理协议、订阅、用户账号或转发规则。
+- 需要多个 DNS 服务商、AAAA 记录、Docker 编排或任意远程 shell 执行。
+
+## 工作原理
+
+1. Master 运行 Telegram long polling，管理员通过 Bot 配置 Cloudflare、DNS、节点和策略。
+2. 每个节点在 Telegram 中生成一次性 Agent 安装命令。
+3. Agent 加入 Master 后获得节点 token，并定期上报在线状态、网卡 RX/TX 计数和版本信息。
+4. Master 按节点月流量额度、阈值、重置日、在线状态、优先级和 cooldown 判断是否需要切换。
+5. 需要切换时，Master 调用 Cloudflare API，把指定分组的 DNS A 记录更新为目标节点 IP。
+6. 切换成功、失败、无可用目标、节点离线或恢复时，Master 会发送 Telegram 通知。
+
+## 当前能力
+
+- Master + Agent 双进程。
+- Telegram Bot 配置和操作入口。
+- Cloudflare DNS A 记录查询与更新。
+- 分组、节点、默认策略和节点级策略。
+- Agent RX/TX 流量统计，支持 `rx`、`tx`、`both` 模式。
+- 本账期已用流量校准，适合导入服务商面板已有用量。
+- 阈值通知、离线通知、恢复通知、自动切换通知和手动切换。
+- SQLite 本地存储和 migration。
+- systemd 安装、升级、卸载和 purge。
+- GitHub Releases 二进制安装，默认不安装 Go。
+- `scripts/smoke.sh` 只读验收检查。
+
+## 当前限制
+
+- 仅支持 Cloudflare。
+- 仅支持 DNS A 记录。
+- Release 二进制当前仅提供 Linux amd64。
+- 仅支持 Telegram long polling，不支持 webhook。
+- 不提供 Web UI。
+- 不提供 Docker 管理。
+- 不管理代理协议、入站端口、用户账号或订阅。
+- 不执行任意远程 shell。
+- Agent 需要能访问 Master 公网地址。
+
+其他架构可以使用源码模式安装，但需要 Go、构建依赖和更多磁盘空间。
+
+## 安装 Master
+
+Master 推荐安装在一台稳定的 Linux amd64 服务器上。安装前准备：
+
+- Telegram Bot Token：从 BotFather 获取。
+- Telegram 管理员 ID：只允许这个 ID 操作 Bot。
+
+交互安装：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-master.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
 ```
-
-安装脚本首次只询问两个内容：
-
-1. Telegram Bot Token
-2. Telegram 管理员 ID
 
 非交互安装：
 
 ```bash
-QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID" bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-master.sh) --yes
+QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID" bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh) --yes
 ```
 
-安装脚本默认从 GitHub Releases 下载预编译二进制，校验 SHA256 后安装 `qdr-master` 并写入 systemd。Master 安装阶段只询问 Telegram Token 和管理员 ID；Cloudflare、DNS、节点、阈值都在 Telegram 中继续配置。
+安装器默认使用 `QDR_INSTALL_MODE=binary`：
 
-### 默认安装方式
+- 从 GitHub Releases 下载 `v0.1.0` 二进制包。
+- 不安装 Go。
+- 不执行 `git clone`。
+- 不执行源码构建。
+- 下载 `SHA256SUMS` 并校验归档。
+- 安装后执行版本校验。
 
-- 默认 `QDR_INSTALL_MODE=binary`
-- 默认不会安装 Go
-- 默认不会在目标机器上 `git clone` + `go build`
-- 默认来源：GitHub Releases 预编译包
-
-### 小磁盘机器要求
-
-- Master 二进制安装建议至少：
-  - `/` 可用空间 >= 80MB
-  - `/tmp` 可用空间 >= 80MB
-- Agent 二进制安装建议至少：
-  - `/` 可用空间 >= 50MB
-  - `/tmp` 可用空间 >= 50MB
-
-如果磁盘空间不足，安装器会在执行 `apt` / `curl` / `tar` / `systemd` 之前直接失败，并提示先清理磁盘。
-
-### 源码构建模式
-
-只有显式指定 `QDR_INSTALL_MODE=source` 时，脚本才会准备 Go、下载源码并现场构建：
+源码模式：
 
 ```bash
-QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxx --master http://203.0.113.10:8080
+QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
 ```
 
-源码模式需要更多磁盘空间，且仅在该模式下才会进入 Go 工具链准备与源码编译流程。
+源码模式适合非 amd64 或需要自行构建的环境，需要 Go 和较多磁盘空间。
+源码模式默认构建 `v0.1.0`，需要指定其他引用时可以设置 `QDR_BRANCH`。
 
-从旧 alpha 版本升级到当前 RC 时，通常直接重新执行安装脚本即可。安装器检测到已有安装后会进入升级/修复路径：停止旧服务、备份现有 env、保留配置和数据、替换二进制、修复权限并重启服务。备份文件类似：
+常用路径：
 
-```text
-/etc/quota-dns-router/master.env.bak.20260604123000
-```
-
-如需完全清理旧版本再重装，才执行：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge
-```
-
-安装后会创建：
-
-- `/etc/quota-dns-router/master.env`
-- `/var/lib/quota-dns-router/`
-- `/var/log/quota-dns-router/`
-- `quota-dns-router-master.service`
-
-启动后向 Bot 发送 `/start` 继续初始化。安装后第一步是在 Telegram 配置 Master 公网地址，不需要手动编辑 `master.env`：
-
-```text
-/config_master_url
-```
-
-支持：
-
-```text
-http://203.0.113.10:8080
-https://example.com
-```
-
-## 配置 Master 公网地址
-
-推荐方式：
-
-```text
-点击 Telegram 里的“配置 Master 公网地址”
-然后点击“使用当前公网地址”
-```
-
-也可以手动发送：
-
-```text
-/config_master_url http://服务器公网IP:8080
-```
-
-如果直接输入服务器公网 IP：
-
-```text
-服务器公网IP
-```
-
-系统会自动补全为：
-
-```text
-http://服务器公网IP:8080
-```
-
-如果 Master 前面有反代或 HTTPS 域名，应配置 `https://example.com`。如果服务器安全组没有放行 8080，Agent 无法连接。`127.0.0.1` 只适合本机调试，不适合 Agent 部署。
+- Master env：`/etc/quota-dns-router/master.env`
+- 数据目录：`/var/lib/quota-dns-router`
+- 日志目录：`/var/log/quota-dns-router`
+- systemd unit：`quota-dns-router-master.service`
+- 二进制：`/usr/local/bin/qdr-master`
 
 ## Telegram 初始化流程
 
-推荐顺序改为按钮 / 向导优先：
+安装 Master 后，在 Telegram 中打开你的 Bot，发送：
 
 ```text
-1. /start
-2. 点击 “1. 配置 Master 公网地址”
-3. 点击 “使用当前公网地址”
-4. 点击 “2. Cloudflare 配置”
-5. 粘贴 Cloudflare Token
-6. 选择 Zone
-7. 点击 “3. DNS 配置” 先确定 Cloudflare A 记录名
-8. 没有分组时，DNS 向导会自动创建 default 分组
-9. 如果还没有节点，DNS 记录会先保存为“待绑定”
-10. 点击 “6. Agent 安装” 生成安装命令
-11. 点击 “5. 节点管理” 添加节点，再回到 DNS 面板完成绑定
-12. 点击 “7. 当前状态” 观察 Agent 是否上线，或从节点详情执行手动切换
+/start
 ```
 
-`/setup` 或 `/start` 会给出同样的初始化向导，并显示当前还缺少哪些配置。`/cf <token> <zone>`、`/groups add <name>`、`/nodes add ...`、`/dns set ...` 这类命令仍可用，但更适合作为高级用法或批量操作。
+推荐顺序：
 
-DNS 向导的新规则：
+1. 配置 Master 公网地址。
+2. 配置 Cloudflare Token 和 Zone。
+3. 配置 DNS A 记录。
+4. 创建分组。
+5. 添加节点。
+6. 生成 Agent 安装命令。
+7. 查看状态。
 
-- 没有分组时，自动创建 `default` 分组并继续。
-- 没有节点时，先把记录名保存为“待绑定”，稍后在 DNS 面板绑定节点。
-- `/status`、`/dns`、`/groups` 会把这类记录明确显示成“待绑定”。
+所有面板都提供返回路径；支持复制命令的 Telegram 客户端会优先显示 `copy_text` 按钮，旧客户端仍可显示纯命令。
 
-## Agent 命令复制
+## 配置 Cloudflare Token
 
-节点详情或 Agent 面板里生成安装命令后，可以直接点：
+在 Telegram 中进入 Cloudflare 配置，发送 Cloudflare API Token。Token 建议只授予目标 Zone 的 DNS 编辑权限。
 
-- `复制安装命令`：优先使用 Telegram `copy_text` 按钮复制当前安装命令，不会在聊天里额外发送命令消息。
-- `显示纯安装命令`：旧客户端不支持复制按钮时的 fallback，Bot 只发送一条单行命令文本。
-- `重新生成命令`：刷新 join code；普通复制和显示纯命令都不会刷新 join code。
-- `复制卸载命令` / `显示纯卸载命令`：卸载命令同理，优先复制按钮，必要时再发送纯命令。
-
-预览页会同时显示安装说明、join code 到期时间和 Agent 卸载命令。Telegram Bot API 对 `copy_text.text` 有长度限制，命令过长时会保留“显示纯安装命令 / 显示纯卸载命令”fallback。
-
-## 流量统计口径
-
-Agent 读取 Linux `/proc/net/dev` 网卡计数，默认统计 Agent 安装/首次上报之后的增量流量。因此刚安装完成时，Telegram `/nodes` 里看到的“已用”可能只有 `0.01GB` 这类很小的数值，这表示 Agent 后续捕获到的增量，不代表服务商本月账单里的历史用量。
-
-如果节点本月已经产生历史流量，需要在 Telegram 节点详情中使用 `校准已用流量`，填入服务商面板里的本月已用值。系统会按：
-
-```text
-合计已用 = 初始已用流量 + Agent 后续增量
-```
-
-来显示用量、计算使用率、触发阈值通知和执行自动切换。新账期开始后，手动校准的初始已用流量会自动清零；如果新周期仍需导入服务商面板数值，可以重新校准。
+Token 保存后，Master 会尝试查询 Zone 列表。你可以从按钮选择 Zone，也可以手动输入 Zone Name 和 Zone ID。
 
 示例：
 
 ```text
-服务商面板显示本月已用 350GB：
-Telegram -> 节点管理 -> 节点详情 -> 校准已用流量 -> 输入 350GB
+Zone Name: example.com
+Token: cf_********abcd
 ```
 
-## 通知功能
+Master 不会在 Telegram 消息里明文回显 Token。
 
-Master 会通过 Telegram 通知这些事件：
+## 配置 DNS A 记录
 
-- 流量达到节点阈值。
-- 节点超过离线超时时间。
-- 节点恢复在线。
-- DNS 自动切换成功。
-- DNS 自动切换失败。
-- 当前节点触发阈值或离线，但同组没有可用切换目标。
+每个分组对应一个 Cloudflare DNS A 记录。推荐使用清晰的业务记录名，例如：
 
-通知会去重：同一节点同一流量周期的阈值通知不会反复刷屏；同一次离线状态、同一个无可用目标状态也只通知一次。流量进入新的重置周期后，阈值通知可以再次触发。当前通知细分开关默认全部启用，后续版本会继续拆成独立持久化开关。
+```text
+hk.example.com
+sg.example.com
+node.example.com
+```
+
+当记录不存在时，向导可以创建记录；当记录存在但 IP 没有匹配节点时，向导会提示你把记录指向已配置节点。
+
+当前只支持 A 记录，不支持 AAAA。
+
+## 添加节点
+
+节点是安装 Agent 的 VPS。每个节点至少需要：
+
+- 节点名：例如 `hk-01`、`sg-01`、`us-01`
+- 公网 IPv4：例如 `203.0.113.10`、`198.51.100.10`、`192.0.2.10`
+- 所属分组：例如 `hk`、`sg`、`us`
+
+节点策略默认从全局策略继承，也可以在节点详情里单独修改：
+
+- 月流量额度。
+- 阈值百分比。
+- 账期重置日。
+- 统计模式：`rx`、`tx`、`both`。
+- 优先级。
+- 是否启用。
+- 是否允许自动切换。
+- 统计网卡。
+
+## 安装 Agent
+
+Agent 安装命令由 Telegram 为具体节点生成。不要手写 join code，也不要复用过期命令。
+
+流程：
+
+1. Telegram 主菜单进入 `Agent 安装`。
+2. 选择节点。
+3. 复制 Bot 生成的完整安装命令。
+4. 在对应 VPS 上执行。
+5. 回到 Telegram 查看节点是否上线。
+
+Agent 默认安装路径：
+
+- Agent env：`/etc/quota-dns-router/agent.env`
+- 数据目录：`/var/lib/quota-dns-router`
+- 日志目录：`/var/log/quota-dns-router`
+- systemd unit：`quota-dns-router-agent.service`
+- 二进制：`/usr/local/bin/qdr-agent`
+
+如果服务器有多张网卡，可以在 Telegram 节点策略中设置统计网卡，或在安装命令里显式带上 `--iface eth0`。
+
+## 流量统计口径
+
+Agent 默认读取 Linux `/proc/net/dev` 中的网卡计数器。
+
+默认口径：
+
+- Agent 首次上报后记录基线。
+- 后续按 RX/TX 计数器增量计算本账期用量。
+- 计数器回绕或系统重启后，Agent 会尽量按新的计数器继续累计。
+- 新账期开始后，校准值会自动清零。
+
+统计模式：
+
+- `rx`：只统计接收流量。
+- `tx`：只统计发送流量。
+- `both`：统计接收 + 发送。
+
+如果统计网卡和默认路由网卡不同，`qdr-agent config-check` 会给出提示。
+
+## 校准已用流量
+
+如果 VPS 在安装 Agent 前，本月已经产生了流量，需要在 Telegram 节点详情里执行“校准已用流量”。
+
+例如服务商面板显示本月已用 `350.5GB`：
+
+```text
+350.5GB
+```
+
+之后 Master 会用：
+
+```text
+初始已用流量 + Agent 增量
+```
+
+作为本账期总用量，并据此判断阈值和自动切换。
+
+## 自动切换规则
+
+Master 会综合以下条件选择目标节点：
+
+- 节点已启用。
+- 节点在线。
+- 节点未超过阈值。
+- 节点允许自动切换。
+- 分组 cooldown 已结束。
+- 优先级更高的节点优先。
+
+当当前节点达到阈值且存在可用目标时，Master 会更新 Cloudflare A 记录。没有可用目标时只发送通知，不会盲目改 DNS。
 
 ## 手动切换
 
-有两种入口：
+你可以在 Telegram 主菜单进入“手动切换”，选择分组和目标节点。手动切换会写入切换历史，触发 Cloudflare A 记录更新，并发送结果通知。
 
-- 主菜单里的 `手动切换`
-- 节点详情里的 `手动切换到此节点`
+手动切换适合维护窗口、临时迁移或主动恢复主节点。
 
-点击后会先显示当前 DNS 指向，再确认切换目标。最近一次切换摘要会区分触发类型，例如手动、自动（阈值）、自动（离线）。
+## 通知说明
 
-## 修改节点策略
+当前通知包括：
 
-在 `/nodes` 进入节点详情后，点击 `修改节点策略`，可以单独修改：
+- 阈值通知。
+- 节点离线通知。
+- 节点恢复通知。
+- DNS 自动切换成功通知。
+- DNS 自动切换失败通知。
+- 无可用切换目标通知。
+- 手动切换结果通知。
 
-- 月流量
-- 阈值百分比
-- 统计模式
-- 重置日
-- priority
-- 启用/禁用
-- 自动切换开关
-
-每次只改一个字段，保存后直接返回节点详情。
-
-## 卸载命令
-
-Master：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge
-```
-
-Agent：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes --purge
-```
-
-常用命令：
-
-```text
-/start
-/menu
-/status
-/setup
-/config_master_url
-/nodes
-/groups
-/dns
-/policy
-/help
-```
-
-## 首屏观察说明
-
-Telegram `/status` 用来看总览，适合真实部署时先扫一眼当前是否能自动切换、最近是否切过、失败是否还在发生。
-
-- `/status`：查看 Master URL、Cloudflare、DNS、分组、节点、在线 Agent、自动切换、最近切换、最近失败和当前风险。
-- `/cf`：查看 Cloudflare Token / Zone 配置和最近一次 Zone 查询结果。
-- `/dns`：查看 DNS A 记录、当前 IP、匹配节点和最近一次 DNS 查询/修改结果。
-- `/groups`：查看切换组、当前指向、可用切换目标和 cooldown。
-- `/nodes`：查看 Agent 在线状态、流量、阈值和节点是否可作为切换目标。
-- `qdr-master config-check`：在 CLI 侧查看同类诊断，适合配合 systemd 日志排障。
-
-`/status` 中的三个摘要含义：
-
-- 最近切换：最近一次 DNS 切换行为，包括分组、DNS Record、旧 IP、新 IP、旧节点、新节点、触发类型、切换时间和结果。
-- 最近失败：最近一次关键失败，例如 Cloudflare Zone 查询失败、DNS 查询失败、DNS 修改失败、Agent install/join 生成失败或 Agent 上报鉴权失败。
-- 当前风险：初始化未完成时会优先显示“待完成”事项，例如配置 DNS A 记录、安装 Agent 到节点；只有节点曾经上线后又失联，才会显示“Agent 离线”。
-
-## Cloudflare Token 权限
-
-建议创建最小权限 API Token：
-
-- Zone.Zone Read
-- Zone.DNS Edit
-
-Token 只通过 Telegram `/cf` 配置，展示时会脱敏，不会写入按钮 callback_data。
-请只在和 Bot 的私聊里配置 Cloudflare Token，不要在群聊里发送。
-
-排障时 Token 只会显示脱敏摘要，不会明文输出。
-
-## Agent 通过 Telegram 安装
-
-在 Telegram 中执行：
-
-```text
-/agent install <节点名>
-```
-
-Bot 会生成类似命令：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join xxxxx --master https://example.com
-```
-
-建议直接使用 Telegram 生成的完整命令。脚本也支持通过环境变量提供 Master 地址，或显式传入：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --join <Telegram生成的join_code> --master https://example.com
-```
-
-如果当前分组还没有 DNS A 记录，Bot 仍可生成 Agent 命令，但会明确提示“可以先安装，自动切换暂时不会生效”，避免把初始化流程卡死在最后一步。
-
-Agent 会使用加入码向 Master 拉取 Agent ID、Agent Token、节点名、分组、上报周期和网卡配置，并写入 `/etc/quota-dns-router/agent.env`。安装完成后 `qdr-agent run` 会立即执行一次上报，Telegram `/nodes` 会从“未安装 / 未上线”变成“在线”。
-
-### Agent 安装失败排查
-
-```bash
-df -h
-qdr-agent version
-qdr-agent status
-qdr-agent config-check
-systemctl status quota-dns-router-agent --no-pager -l
-journalctl -u quota-dns-router-agent -n 100 --no-pager
-```
-
-重点说明：
-
-- 如果 `df -h` 显示 `/` 已经 100%，请先清理磁盘再重试：
-
-```bash
-apt clean
-journalctl --vacuum-size=100M
-docker system prune -af
-```
-
-- 默认是二进制安装，不需要 Go；只有 `QDR_INSTALL_MODE=source` 才会准备 Go 并源码构建。
-- 如果系统已经有可用的 Go，源码模式会优先复用系统 Go。
-- 官方 Go tarball fallback 会先解压到临时目录，确认完整后再移动到 `/usr/local/go`。
-
-## 节点流量策略
-
-节点支持三种统计模式：
-
-- `rx`：只统计下行 RX
-- `tx`：只统计上行 TX
-- `both` 或 `rx+tx`：统计 RX+TX
-
-`/policy` 现在是默认策略中心，新建节点时默认只需要选择分组、填写节点名称和公网 IP，其他值直接继承默认策略；如果需要单独修改，再在确认页点击“修改流量策略”，或在节点详情中单独调整。
-
-可通过 `/policy set` 设置默认值，也可在 `/nodes add` 时覆盖：
-
-```text
-/policy set threshold=80 quota=1000GB reset_day=1 mode=both offline=300 auto_switch=true notify_only=false
-```
-
-## 自动切换说明
-
-触发条件包括：
-
-- 当前节点流量达到阈值
-- 当前节点离线超过策略时间
-- 当前节点被禁用
-- 当前节点不参与自动切换
-
-目标节点规则：
-
-- 同组
-- enabled=true
-- auto_switch=true
-- 未离线
-- 未达到阈值
-- priority 小的优先
-- priority 相同选择使用率最低
-
-每个分组有切换冷却时间，默认 10 分钟，避免频繁切换。
-
-自动切换更可靠的前提：
-
-- 当前 Cloudflare DNS A 记录 IP 最好能匹配某个已配置节点
-- `proxied=true` 时，看到的可能是 Cloudflare 代理链路表现，不一定等于真实源站 IP
-- Agent 离线节点不会作为切换目标
-
-## 卸载
-
-Master：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-master.sh) --yes --purge
-```
-
-Agent：
-
-```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/uninstall-agent.sh) --yes --purge
-```
-
-卸载脚本支持 `--dry-run` 和 `--help`，重复执行不会因为文件不存在而致命失败。
-
-非 `--purge` 卸载会移除服务和二进制，并默认保留 `/var/lib/quota-dns-router` 数据目录；`--purge` 会清理配置、数据、日志、systemd unit 和二进制。
+通知会基于数据库记录去重，减少同一状态反复刷屏。
 
 ## 升级
 
-Master 升级：
+重新执行安装脚本即可升级或修复安装。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-master.sh) --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
 ```
 
-Agent 升级：
+安装器会检测已有安装：
+
+- 停止旧服务。
+- 备份现有 env。
+- 保留配置和数据。
+- 替换二进制。
+- 执行版本校验。
+- 重启 systemd 服务。
+
+Agent 升级同样使用 Telegram 中生成的安装命令。已有 `agent.env` 时，安装器会保留配置并跳过 join。
+
+## 卸载
+
+默认卸载会保留数据目录，方便之后恢复。
+
+卸载 Master：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/main/scripts/install-agent.sh) --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-master.sh) --yes
 ```
 
-已有 Agent 安装存在 `/etc/quota-dns-router/agent.env` 时，升级会保留 Master URL、Agent ID、Agent Token、节点名、iface 和 state 文件。只有需要重新绑定节点时，才使用 Telegram 重新生成的完整 Agent 安装命令。
+卸载 Agent：
 
-## CLI
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes
+```
+
+完全清理：
+
+```bash
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-master.sh) --yes --purge
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes --purge
+```
+
+`--purge` 会清理配置、数据、日志、unit 和二进制。
+
+## Smoke 验收
+
+`scripts/smoke.sh` 只做只读检查，不修改配置。
 
 Master：
 
 ```bash
-qdr-master run
-qdr-master telegram-run
-qdr-master status
-qdr-master config-check
-qdr-master telegram-status
-qdr-master version
-qdr-master migrate
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/smoke.sh) master
 ```
 
 Agent：
 
 ```bash
-qdr-agent run
-qdr-agent once
-qdr-agent status
-qdr-agent join --code <code> --master <url>
-qdr-agent config-check
-qdr-agent version
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/smoke.sh) agent
 ```
 
-## 常见问题
+检查项包括二进制、版本输出、systemd 状态、env 权限、数据目录权限和 CLI 诊断命令。
 
-**Agent 第一次上报 delta 为 0 正常吗？**
+## 故障排查
 
-正常。第一次运行会保存当前计数，下一次开始计算增量。
-
-**网卡计数器重置怎么办？**
-
-Agent 发现当前计数小于上次计数时，会按重置处理，使用当前计数作为本次 delta，避免负数。
-
-**Cloudflare Zone ID / Record ID 必须手动填吗？**
-
-不是必须。程序会在切换时查询 Zone 和 A 记录；提供 ID 可以减少 API 查询。
-
-**Master 安装后 Agent 命令里的地址是 127.0.0.1 怎么办？**
-
-这是未完成初始化的状态。请在 Telegram 执行 `/config_master_url`，配置 Agent 可访问的公网地址。未配置前，Bot 会拒绝生成 Agent 安装命令，并提示“当前 Master 地址仍是本机地址，Agent 无法访问。请先配置 Master 公网地址。”首次安装脚本仍只询问 Telegram Token 和管理员 ID。
-
-**服务启动时报 master.env permission denied 怎么办？**
-
-先看日志：
+Master 常用命令：
 
 ```bash
+qdr-master status
+qdr-master config-check
+qdr-master telegram-status
 journalctl -u quota-dns-router-master -n 100 --no-pager
 ```
 
-如果看到：
-
-```text
-open /etc/quota-dns-router/master.env: permission denied
-```
-
-说明配置文件或目录权限错误，应检查：
+Agent 常用命令：
 
 ```bash
-ls -l /etc/quota-dns-router/master.env
-ls -ld /etc/quota-dns-router /var/lib/quota-dns-router /var/log/quota-dns-router
+qdr-agent status
+qdr-agent config-check
+journalctl -u quota-dns-router-agent -n 100 --no-pager
 ```
 
-推荐权限是 `/etc/quota-dns-router` 为 `root:quota-dns-router 750`，`master.env` 为 `root:quota-dns-router 640`，数据和日志目录为 `quota-dns-router:quota-dns-router 750`。
+常见问题：
 
-**Token 泄露怎么办？**
-
-不要把 Telegram Bot Token 发到公开聊天或日志里。如果泄露，请立即到 @BotFather 重新生成 token，并更新 `/etc/quota-dns-router/master.env` 后重启服务。
-
-## 首次部署验收清单
-
-1. 确认 Master 服务正常：
-
-```bash
-systemctl status quota-dns-router-master
-```
-
-2. 在服务器上运行：
-
-```bash
-qdr-master config-check
-```
-
-3. 在 Telegram 中执行：
-
-```text
-/status
-```
-
-确认没有关键缺项，至少已完成：
-
-- Master 公网地址
-- Cloudflare Token / Zone
-- DNS A 记录
-- 分组
-- 节点
-
-4. 先在 Telegram 中完成 DNS A 记录配置，再生成 Agent 安装命令：
-
-```text
-/dns
-/agent install <节点名>
-```
-
-5. 在节点服务器执行安装命令，等待 Agent 首次上线。
-
-6. 回到 Telegram 检查：
-
-```text
-/nodes
-```
-
-确认节点 `online=true`。
-
-7. 进行切换验收：
-
-- 可以先做 dry-run 式人工验证：检查当前 DNS 配置、节点优先级、阈值和自动切换开关。
-- 再通过降低阈值或构造测试流量，模拟阈值触发，观察 Telegram 通知和 Cloudflare A 记录切换结果。
-
-也可以在服务器上运行 smoke 验收脚本：
-
-```bash
-bash scripts/smoke.sh master
-bash scripts/smoke.sh agent
-```
-
-## 排障查看顺序
-
-推荐按下面顺序排查：
-
-1. Telegram `/status`
-2. Telegram `/cf`
-3. Telegram `/dns`
-4. Telegram `/groups`
-5. Telegram `/nodes`
-6. `qdr-master config-check`
-7. `journalctl -u quota-dns-router-master -n 100 --no-pager`
-8. `journalctl -u quota-dns-router-agent -n 100 --no-pager`
-
-重点说明：
-
-- Token 只显示脱敏内容
-- `proxied=true` 可能影响你看到的实际回源行为
-- DNS 当前 IP 最好匹配某个节点，自动切换判断会更稳定
-- Agent 离线节点不会被视为可用切换目标
+- Bot 无响应：检查 Telegram Token、管理员 ID、网络连通性和 `qdr-master telegram-status`。
+- Agent 不上线：确认 Master 公网地址可访问，Agent 安装命令来自 Telegram，且 join code 未过期。
+- 流量不符合预期：检查统计模式、统计网卡和是否需要校准已用流量。
+- DNS 未切换：检查 Cloudflare Token 权限、Zone、A 记录、节点在线状态和分组 cooldown。
+- 非 amd64 机器无法下载二进制：使用 `QDR_INSTALL_MODE=source`。
 
 ## 安全注意事项
 
-- Telegram 只允许管理员 ID 操作。
-- Telegram Token、Cloudflare Token、Agent Token 不应进入日志或错误消息。
-- Agent API 必须使用 Bearer Token。
-- callback_data 不包含密钥。
-- 不提供远程执行 shell 命令能力。
+- Telegram Bot Token、Cloudflare Token、Agent token 和 join code 都应视为敏感数据。
+- Cloudflare Token 建议仅授予目标 Zone 的 DNS 编辑权限。
+- 只把 Telegram 管理员 ID 设置为可信账号。
+- 不要把 Telegram 生成的 Agent 安装命令公开发布。
+- Master 公网地址建议放在防火墙、反向代理或安全组策略之后，只开放必要端口。
+- 定期备份 `/var/lib/quota-dns-router/master.db`。
 
-## 当前限制
+## 常见问题
 
-- 当前正式版仅支持 Cloudflare DNS A 记录。
-- 当前 release 仅提供 `linux/amd64` 二进制。
-- 暂不支持 Web UI。
-- 暂不支持多 DNS 服务商。
-- 暂不支持 AAAA 记录。
+### Master 安装时还需要 Cloudflare Token 吗？
 
-## 测试
+不需要。Master 安装阶段只需要 Telegram Bot Token 和 Telegram 管理员 ID。Cloudflare Token 在 Telegram Bot 中配置。
+
+### Agent 安装命令可以自己拼吗？
+
+不建议。Agent 命令包含一次性 join code，应从 Telegram 复制完整命令。
+
+### 已有 VPS 本月流量怎么办？
+
+在 Telegram 节点详情中使用“校准已用流量”，填入服务商面板显示的本账期已用量。
+
+### 二进制安装失败怎么办？
+
+确认服务器是 Linux amd64，并检查 GitHub Releases 访问。其他架构使用源码模式：
 
 ```bash
-gofmt -w cmd internal migrations scripts
-go test ./...
-go vet ./...
-bash -n scripts/install-master.sh
-bash -n scripts/install-agent.sh
-bash -n scripts/uninstall-master.sh
-bash -n scripts/uninstall-agent.sh
+QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
 ```
+
+### 卸载会删除数据库吗？
+
+默认不会。只有传入 `--purge` 才会清理配置、数据和日志。
+
+## Release 与架构支持
+
+`v0.1.0` 发布资产：
+
+- `qdr-master_linux_amd64.tar.gz`
+- `qdr-agent_linux_amd64.tar.gz`
+- `SHA256SUMS`
+
+归档内包含对应二进制和 `README.txt`。当前 Release 只提供 Linux amd64；其他架构请使用源码模式构建。
