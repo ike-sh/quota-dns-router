@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.2.3.1
+
+- README 同步 Route53、只读 Web 面板、AAAA 等当前能力；修正「仅 Cloudflare」等过时描述。
+- `smoke.sh` 增加版本、healthz、readyz、本机 `/api/status` 检查。
+- 发布文档：GitHub Release 正文模板、gh CLI 指南、v0.2.3 smoke 清单。
+
 ## 0.2.3
 
 - 代码审查修复：AAAA + IPv6 节点校验闭环；CLI `status`/`config-check` 使用 `NewDNSProvider`。
