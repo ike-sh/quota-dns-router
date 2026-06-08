@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.2.3.4
+
+- 网卡计数器回绕时跳过模糊流量增量，避免误触发切换。
+- Route53 upsert 从 recordID 解析 `SetIdentifier`（加权路由场景）。
+- Join 码原子核销；重新 join 时吊销旧 Agent Token。
+
 ## 0.2.3.3
 
 - 修复 `AutoSwitchEnabled` 关闭后仍自动切换 DNS 的逻辑缺陷。

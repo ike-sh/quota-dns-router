@@ -92,6 +92,27 @@
 - **删除**：`getInt64`/`getBool`、`ListCloudflareConfigs`、Telegram 未引用包装函数、`dnsNoGroupMenu` 等
 - **保留**：`NewBot` / `NewBotForAdmins` 兼容包装（#A11）
 
+## v0.2.3.4 审计
+
+### ✅ #B8 流量计数器回绕误报
+- **问题**：`cur < prev` 时将整个 `cur` 计为增量，重启后可能虚假超阈值
+- **修复**：回绕时 `computeDelta` 返回 0
+- **文件**：`internal/traffic/traffic.go`
+
+### ✅ #B9 Route53 recordID 忽略 SetIdentifier
+- **问题**：加权/多值路由记录 upsert 可能更新错误记录集
+- **修复**：`splitRoute53SetIdentifier` 解析 `#setId` 后缀
+- **文件**：`internal/route53/client.go`
+
+### ✅ #B10 Join 并发双花 + Token 未轮换
+- **问题**：`SELECT` 后 `UPDATE` 存在竞态；重新 join 不吊销旧 Token
+- **修复**：条件 `UPDATE` 原子核销；签发新 Token 前 `revoke` 旧凭证
+- **文件**：`internal/db/store.go`
+
+### #B11 Join 限流（现状可接受）
+- **状态**：10 次/分钟/IP；report 120 次/分钟/token 或 IP；body 64KB 限制
+- **建议**：生产环境 Master 应置于可信反代后，避免公网直接暴露 join 端点
+
 ## 验证
 
 ```bash

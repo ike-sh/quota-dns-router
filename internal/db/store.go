@@ -872,25 +872,29 @@ func (s *Store) RedeemJoinCode(ctx context.Context, code string) (JoinCodeResult
 			_ = tx.Rollback()
 		}
 	}()
-	var joinID string
-	var nodeID string
-	var expiresAt time.Time
-	var usedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, node_id, expires_at, used_at
-		FROM join_codes WHERE code_hash = ?
-	`, HashSecret(code)).Scan(&joinID, &nodeID, &expiresAt, &usedAt)
+	codeHash := HashSecret(code)
+	now := time.Now()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE join_codes
+		SET used_at = ?
+		WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?
+	`, now, codeHash, now)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return JoinCodeResult{}, fmt.Errorf("加入码无效")
-		}
 		return JoinCodeResult{}, err
 	}
-	if usedAt.Valid {
-		return JoinCodeResult{}, fmt.Errorf("加入码已使用")
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return JoinCodeResult{}, err
 	}
-	if time.Now().After(expiresAt) {
-		return JoinCodeResult{}, fmt.Errorf("加入码已过期")
+	if rows == 0 {
+		return JoinCodeResult{}, fmt.Errorf("加入码无效或已使用")
+	}
+	var nodeID string
+	err = tx.QueryRowContext(ctx, `
+		SELECT node_id FROM join_codes WHERE code_hash = ?
+	`, codeHash).Scan(&nodeID)
+	if err != nil {
+		return JoinCodeResult{}, err
 	}
 
 	node, err := scanNodeTx(tx.QueryRowContext(ctx, `
@@ -918,6 +922,12 @@ func (s *Store) RedeemJoinCode(ctx context.Context, code string) (JoinCodeResult
 			return JoinCodeResult{}, err
 		}
 	}
+	if _, err = tx.ExecContext(ctx, `
+		UPDATE agent_tokens SET revoked_at = ?
+		WHERE agent_id = ? AND revoked_at IS NULL
+	`, now, agentID); err != nil {
+		return JoinCodeResult{}, err
+	}
 	token, err := NewSecret()
 	if err != nil {
 		return JoinCodeResult{}, err
@@ -926,11 +936,6 @@ func (s *Store) RedeemJoinCode(ctx context.Context, code string) (JoinCodeResult
 		INSERT INTO agent_tokens(id, agent_id, token_hash)
 		VALUES(?, ?, ?)
 	`, NewID("atok"), agentID, HashSecret(token)); err != nil {
-		return JoinCodeResult{}, err
-	}
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE join_codes SET used_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, joinID); err != nil {
 		return JoinCodeResult{}, err
 	}
 	if err = tx.Commit(); err != nil {
