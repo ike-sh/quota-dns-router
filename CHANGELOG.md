@@ -1,11 +1,13 @@
 # CHANGELOG
 
-## 0.2.1 (unreleased)
+## 0.2.1
 
 - 只读 Web 状态面板：`GET /`、`/status` 与 `GET /api/status` JSON API。
 - 可选 `QDR_STATUS_READONLY_TOKEN` Bearer 鉴权。
 - HTTP `clientIP` 仅在可信反代（loopback/私网）时信任 `X-Forwarded-For` / `X-Real-IP`。
 - join 限流 map 自动清理过期 IP 条目。
+- Telegram 只读观察者：`QDR_TELEGRAM_OBSERVER_IDS` 可查看状态，不可修改配置。
+- DNS 服务商工厂：`QDR_DNS_PROVIDER=cloudflare`（预留第二服务商扩展）。
 
 ## 0.2.0
 

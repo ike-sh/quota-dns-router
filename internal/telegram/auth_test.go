@@ -26,6 +26,19 @@ func TestIsAdminSupportsMultipleIDs(t *testing.T) {
 	}
 }
 
+func TestObserverCanAccessButNotAdmin(t *testing.T) {
+	bot := NewBotForRoles("token", []int64{123}, []int64{456}, nil)
+	if !bot.IsObserver(456) || bot.IsAdmin(456) {
+		t.Fatal("expected observer only")
+	}
+	if !bot.CanAccess(456) {
+		t.Fatal("observer should access")
+	}
+	if bot.IsObserver(123) {
+		t.Fatal("admin should not be observer")
+	}
+}
+
 func TestInlineKeyboardButtonSupportsCopyText(t *testing.T) {
 	markup := ReplyMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
 		{Text: "复制安装命令", CopyText: &CopyTextButton{Text: "bash install.sh"}},

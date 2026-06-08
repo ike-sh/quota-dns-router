@@ -17,10 +17,11 @@ type HTTPClient interface {
 }
 
 type Bot struct {
-	token      string
-	adminIDs   []int64
-	httpClient HTTPClient
-	baseURL    string
+	token       string
+	adminIDs    []int64
+	observerIDs []int64
+	httpClient  HTTPClient
+	baseURL     string
 }
 
 type UpdateResponse struct {
@@ -98,34 +99,61 @@ type CopyTextButton struct {
 }
 
 func NewBot(token string, adminID int64, client HTTPClient) *Bot {
-	return NewBotForAdmins(token, []int64{adminID}, client)
+	return NewBotForRoles(token, []int64{adminID}, nil, client)
 }
 
 func NewBotForAdmins(token string, adminIDs []int64, client HTTPClient) *Bot {
+	return NewBotForRoles(token, adminIDs, nil, client)
+}
+
+func NewBotForRoles(token string, adminIDs, observerIDs []int64, client HTTPClient) *Bot {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
-	ids := make([]int64, 0, len(adminIDs))
+	admins := make([]int64, 0, len(adminIDs))
 	for _, id := range adminIDs {
 		if id != 0 {
-			ids = append(ids, id)
+			admins = append(admins, id)
 		}
 	}
+	observers := make([]int64, 0, len(observerIDs))
+	for _, id := range observerIDs {
+		if id == 0 {
+			continue
+		}
+		if containsInt64(admins, id) {
+			continue
+		}
+		observers = append(observers, id)
+	}
 	return &Bot{
-		token:      token,
-		adminIDs:   ids,
-		httpClient: client,
-		baseURL:    fmt.Sprintf("https://api.telegram.org/bot%s", token),
+		token:       token,
+		adminIDs:    admins,
+		observerIDs: observers,
+		httpClient:  client,
+		baseURL:     fmt.Sprintf("https://api.telegram.org/bot%s", token),
 	}
 }
 
-func (b *Bot) IsAdmin(id int64) bool {
-	for _, adminID := range b.adminIDs {
-		if id == adminID {
+func containsInt64(items []int64, target int64) bool {
+	for _, item := range items {
+		if item == target {
 			return true
 		}
 	}
 	return false
+}
+
+func (b *Bot) IsAdmin(id int64) bool {
+	return containsInt64(b.adminIDs, id)
+}
+
+func (b *Bot) IsObserver(id int64) bool {
+	return containsInt64(b.observerIDs, id)
+}
+
+func (b *Bot) CanAccess(id int64) bool {
+	return b.IsAdmin(id) || b.IsObserver(id)
 }
 
 func (b *Bot) GetUpdates(ctx context.Context, offset int, timeout time.Duration) ([]Update, error) {

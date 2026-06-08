@@ -19,6 +19,8 @@ type MasterConfig struct {
 	TelegramToken         string
 	TelegramAdminID       int64
 	TelegramAdminIDs      []int64
+	TelegramObserverIDs   []int64
+	DNSProvider           string
 	TelegramPollTimeout   time.Duration
 	CheckInterval         time.Duration
 	AgentOfflineAfter     time.Duration
@@ -37,6 +39,10 @@ func LoadMaster(path string) (MasterConfig, error) {
 	values := MergeEnv(fileValues)
 
 	adminIDs, err := parseTelegramAdminIDs(values)
+	if err != nil {
+		return MasterConfig{}, err
+	}
+	observerIDs, err := parseTelegramObserverIDs(values)
 	if err != nil {
 		return MasterConfig{}, err
 	}
@@ -76,6 +82,8 @@ func LoadMaster(path string) (MasterConfig, error) {
 		TelegramToken:              getString(values, "QDR_TELEGRAM_TOKEN", ""),
 		TelegramAdminID:            adminID,
 		TelegramAdminIDs:           adminIDs,
+		TelegramObserverIDs:        observerIDs,
+		DNSProvider:                getString(values, "QDR_DNS_PROVIDER", "cloudflare"),
 		TelegramPollTimeout:        pollTimeout,
 		CheckInterval:              checkInterval,
 		AgentOfflineAfter:          offlineAfter,
@@ -120,6 +128,27 @@ func parseTelegramAdminIDs(values map[string]string) ([]int64, error) {
 		return nil, fmt.Errorf("QDR_TELEGRAM_ADMIN_ID 不是有效数字")
 	}
 	return []int64{adminID}, nil
+}
+
+func parseTelegramObserverIDs(values map[string]string) ([]int64, error) {
+	multi := strings.TrimSpace(getString(values, "QDR_TELEGRAM_OBSERVER_IDS", ""))
+	if multi == "" {
+		return nil, nil
+	}
+	parts := strings.Split(multi, ",")
+	ids := make([]int64, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("QDR_TELEGRAM_OBSERVER_IDS 包含无效数字：%s", part)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 func (c MasterConfig) String() string {

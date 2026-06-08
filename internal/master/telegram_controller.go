@@ -143,15 +143,24 @@ func (c *TelegramController) Run(ctx context.Context) error {
 
 func (c *TelegramController) handleUpdate(ctx context.Context, update telegram.Update) error {
 	if update.Message != nil {
-		if !c.Bot.IsAdmin(update.Message.From.ID) {
+		userID := update.Message.From.ID
+		if !c.Bot.CanAccess(userID) {
 			return c.Bot.SendMessage(ctx, update.Message.Chat.ID, "无权限操作。", nil)
+		}
+		if c.Bot.IsObserver(userID) && isMutatingCommand(strings.TrimSpace(update.Message.Text)) {
+			return c.Bot.SendMessage(ctx, update.Message.Chat.ID, "你是只读观察者，无法修改配置。", nil)
 		}
 		return c.handleMessage(ctx, update.Message)
 	}
 	if update.CallbackQuery != nil {
-		if !c.Bot.IsAdmin(update.CallbackQuery.From.ID) {
+		userID := update.CallbackQuery.From.ID
+		if !c.Bot.CanAccess(userID) {
 			_ = c.Bot.AnswerCallback(ctx, update.CallbackQuery.ID, "无权限")
 			return nil
+		}
+		if c.Bot.IsObserver(userID) && isMutatingCallback(update.CallbackQuery.Data) {
+			_ = c.Bot.AnswerCallback(ctx, update.CallbackQuery.ID, "只读观察者无权限")
+			return c.Bot.SendMessage(ctx, update.CallbackQuery.Message.Chat.ID, "你是只读观察者，无法修改配置。", nil)
 		}
 		_ = c.Bot.AnswerCallback(ctx, update.CallbackQuery.ID, "已选择")
 		return c.withCallbackMessage(update.CallbackQuery.Message.Chat.ID, update.CallbackQuery.Message.MessageID, func() error {

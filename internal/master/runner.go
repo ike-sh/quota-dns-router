@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"quota-dns-router-go/internal/cloudflare"
 	"quota-dns-router-go/internal/config"
 	"quota-dns-router-go/internal/db"
 	"quota-dns-router-go/internal/telegram"
@@ -19,7 +18,7 @@ type Runtime struct {
 	Config config.MasterConfig
 	Store  *db.Store
 	Bot    *telegram.Bot
-	DNS    *cloudflare.Client
+	DNS    DNSProvider
 }
 
 func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error) {
@@ -45,12 +44,17 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 	} else if suggested := SuggestedPublicAPIURLFromIP(cfg.DetectedPublicIP); suggested != "" {
 		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, suggested)
 	}
-	bot := telegram.NewBotForAdmins(cfg.TelegramToken, cfg.TelegramAdminIDs, nil)
+	bot := telegram.NewBotForRoles(cfg.TelegramToken, cfg.TelegramAdminIDs, cfg.TelegramObserverIDs, nil)
+	dns, err := NewDNSProvider(cfg.DNSProvider)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	return &Runtime{
 		Config: cfg,
 		Store:  store,
 		Bot:    bot,
-		DNS:    cloudflare.NewClient(nil),
+		DNS:    dns,
 	}, nil
 }
 

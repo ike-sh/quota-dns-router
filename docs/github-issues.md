@@ -73,14 +73,18 @@
 
 ## P4 — 可选（按需）
 
-### #14 第二 DNS 服务商（Route53 / DNSPod）
-- 抽象 `DNSProvider` 已有 Cloudflare 实现，可新增 adapter
-- 建议 v0.3.0 里程碑
+### #14 第二 DNS 服务商（进行中）
+- `NewDNSProvider` 工厂 + `QDR_DNS_PROVIDER` 配置项
+- Cloudflare 为默认实现；Route53 / DNSPod adapter 待贡献（v0.3.0）
 
 ### ✅ #15 只读 Web 状态面板
 - `embed.FS` 静态页 `/`、`/status` + `GET /api/status` JSON
 - 无需 Telegram 即可查看节点 / DNS / 风险摘要
 - 可选 Bearer 只读 Token（`QDR_STATUS_READONLY_TOKEN`）
 
-### #16 Telegram 只读观察者
+### ✅ #16 Telegram 只读观察者
 - `QDR_TELEGRAM_OBSERVER_IDS`：可查看状态，不可修改配置
+
+### #14 第二 DNS 服务商（进行中）
+- `NewDNSProvider` 工厂 + `QDR_DNS_PROVIDER` 配置项
+- Cloudflare 为默认实现；Route53/DNSPod adapter 待贡献
