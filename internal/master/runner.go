@@ -37,6 +37,12 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 		_ = store.Close()
 		return nil, err
 	}
+	if secs := int(cfg.AgentOfflineAfter.Seconds()); secs > 0 {
+		policy.AgentOfflineSeconds = secs
+	}
+	if secs := int(cfg.OfflineNotifyAfter.Seconds()); secs > 0 {
+		policy.OfflineNotifySeconds = secs
+	}
 	if err := store.SavePolicy(ctx, policy); err != nil {
 		_ = store.Close()
 		return nil, err

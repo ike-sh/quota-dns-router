@@ -276,10 +276,6 @@ func (c *TelegramController) handleTextMessage(ctx context.Context, chatID int64
 	}
 }
 
-func (c *TelegramController) handleSession(ctx context.Context, chatID int64, state, text string) error {
-	return c.handlePendingInput(ctx, chatID, state, text, 0)
-}
-
 func (c *TelegramController) sendMenu(ctx context.Context, chatID int64) error {
 	return c.sendMessageOrEdit(ctx, chatID, "quota-dns-router 已启动。请选择操作：", mainMenu())
 }
@@ -305,18 +301,3 @@ func (c *TelegramController) sendSetup(ctx context.Context, chatID int64) error 
 	return c.sendMessageOrEdit(ctx, chatID, FormatSetupGuide(status), setupMenu())
 }
 
-func (c *TelegramController) sendGroups(ctx context.Context, chatID int64) error {
-	return c.sendGroupsPanel(ctx, chatID, "")
-}
-
-func (c *TelegramController) sendNodes(ctx context.Context, chatID int64) error {
-	return c.sendNodesPanel(ctx, chatID, "")
-}
-
-func (c *TelegramController) sendCloudflareSummary(ctx context.Context, chatID int64) error {
-	return c.sendCloudflarePanel(ctx, chatID, "")
-}
-
-func (c *TelegramController) sendDNSSummary(ctx context.Context, chatID int64) error {
-	return c.sendDNSPanel(ctx, chatID, "")
-}

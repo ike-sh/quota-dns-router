@@ -259,7 +259,7 @@ func (c *TelegramController) buildManualSwitchDecision(ctx context.Context, grou
 		_, _ = c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, cfg.RecordName, cfg.RecordID, dnsRecordType(cfg, ""), cfg.TTL, cfg.Proxied, cfg.AllowOverride)
 	}
 	if strings.TrimSpace(cfg.RecordID) == "" {
-		record, lookupErr := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+		record, lookupErr := lookupGroupDNSRecord(ctx, c.DNS, cfg)
 		if lookupErr != nil {
 			return SwitchDecision{}, errors.New("当前 DNS 记录还处于待绑定状态，请先在 DNS 面板绑定到节点。")
 		}

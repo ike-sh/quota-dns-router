@@ -13,6 +13,53 @@ import (
 	"quota-dns-router-go/internal/db"
 )
 
+func TestReportSyncsPublicIPFromAgent(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, _ := store.CreateGroup(ctx, "hk", 600)
+	node, _ := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	code, _ := store.GenerateJoinCode(ctx, node.ID, time.Hour)
+	join, _ := store.RedeemJoinCode(ctx, code)
+
+	srv := HTTPServer{Store: store, Service: NewService(store, nil, nil)}
+	body, _ := json.Marshal(api.AgentReportRequest{
+		AgentID:      join.AgentID,
+		PublicIP:     "198.51.100.42",
+		RXBytesTotal: 100,
+		TXBytesTotal: 50,
+		ReportedAt:   time.Now().UTC(),
+		AgentVersion: "test",
+		Status:       "online",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/agent/report", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+join.AgentToken)
+	rec := httptest.NewRecorder()
+	srv.report(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	updated, err := store.GetNodeByID(ctx, node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PublicIP != "198.51.100.42" {
+		t.Fatalf("expected public_ip synced from agent report, got %q", updated.PublicIP)
+	}
+}
+
 func TestReportNotifiesTrafficModeMismatch(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()

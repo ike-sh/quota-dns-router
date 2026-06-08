@@ -42,6 +42,10 @@ func dnsRecordType(cfg db.CloudflareConfig, discovered string) string {
 	return "A"
 }
 
+func lookupGroupDNSRecord(ctx context.Context, dns DNSProvider, cfg db.CloudflareConfig) (cloudflare.DNSRecord, error) {
+	return dns.LookupDNSRecordWithType(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName, dnsRecordType(cfg, ""))
+}
+
 type Service struct {
 	Store    *db.Store
 	Notifier TelegramNotifier
@@ -128,6 +132,13 @@ func (s *Service) HandleGroup(ctx context.Context, groupID string) error {
 	}
 	if policy.MaintenanceMode {
 		slog.Info("auto switch skipped: maintenance mode enabled",
+			"group", decision.Group.Name,
+			"reason", decision.Reason,
+		)
+		return nil
+	}
+	if !policy.AutoSwitchEnabled {
+		slog.Info("auto switch skipped: auto switch disabled",
 			"group", decision.Group.Name,
 			"reason", decision.Reason,
 		)
@@ -352,12 +363,16 @@ func (s *Service) CheckOfflineNodes(ctx context.Context) error {
 		if !node.LastReportedAt.Valid {
 			continue
 		}
-		if now.Sub(node.LastReportedAt.Time) <= time.Duration(policy.AgentOfflineSeconds)*time.Second {
+		offlineFor := now.Sub(node.LastReportedAt.Time)
+		if offlineFor <= time.Duration(policy.AgentOfflineSeconds)*time.Second {
 			continue
 		}
 		if node.Online {
 			_ = s.Store.MarkNodeOffline(ctx, node.ID)
 			node.Online = false
+		}
+		if offlineFor < time.Duration(policy.OfflineNotifySeconds)*time.Second {
+			continue
 		}
 		cfg, _ := s.Store.GetCloudflareConfigByGroupID(ctx, node.GroupID)
 		msg := offlineMessage(node, cfg, policy, now)
@@ -482,7 +497,7 @@ func thresholdMessage(d SwitchDecision) string {
 
 func switchOKMessage(d SwitchDecision) string {
 	return fmt.Sprintf(
-		"✅ DNS 自动切换成功\n\n触发原因：%s\n分组：%s\n域名：%s\n旧节点：%s / %s\n新节点：%s / %s\nCloudflare：已确认",
+		"✅ DNS 自动切换成功\n\n触发原因：%s\n分组：%s\n域名：%s\n旧节点：%s / %s\n新节点：%s / %s\nDNS：已确认",
 		switchReasonLabel(d),
 		d.Group.Name,
 		d.Config.RecordName,

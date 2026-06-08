@@ -218,6 +218,60 @@ func TestOfflineAndRecoveryNotifications(t *testing.T) {
 	}
 }
 
+func TestOfflineNotificationWaitsForNotifySeconds(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.GetPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.AgentOfflineSeconds = 300
+	policy.OfflineNotifySeconds = 600
+	if err := store.SavePolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	firstReport := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
+	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 100, firstReport))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{})
+	svc.Now = func() time.Time { return firstReport.Add(8 * time.Minute) }
+	if err := svc.CheckOfflineNodes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(notifier.messages) != 0 {
+		t.Fatalf("expected no offline notification before notify threshold, got %v", notifier.messages)
+	}
+	svc.Now = func() time.Time { return firstReport.Add(11 * time.Minute) }
+	if err := svc.CheckOfflineNodes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "节点离线"); got != 1 {
+		t.Fatalf("expected one offline notification after notify threshold, got %d: %v", got, notifier.messages)
+	}
+}
+
 func TestNeverReportedNodeDoesNotSendOfflineNotification(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
@@ -430,6 +484,69 @@ func TestNotificationFailureRecordsLastErrorWithoutBlocking(t *testing.T) {
 	}
 	if strings.Contains(item.Message, "bot_secret") {
 		t.Fatalf("expected notification error to be sanitized, got %q", item.Message)
+	}
+}
+
+func TestAutoSwitchDisabledSkipsExecuteSwitch(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
+	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.GetPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.AutoSwitchEnabled = false
+	if err := store.SavePolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.BindAgentToNode(ctx, oldNode.ID, "agent-old")
+	_ = store.BindAgentToNode(ctx, newNode.ID, "agent-new")
+	_ = store.SaveAgentReport(ctx, reportFor("agent-old", oldNode.PublicIP, 900, now))
+	_ = store.SaveAgentReport(ctx, reportFor("agent-new", newNode.PublicIP, 100, now))
+	updateCalls := []dnsUpdateCall{}
+	svc := NewService(store, &fakeNotifier{}, fakeDNS{
+		record:      cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: oldNode.PublicIP, TTL: 60},
+		updateCalls: &updateCalls,
+	})
+	svc.Now = func() time.Time { return now }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(updateCalls) != 0 {
+		t.Fatalf("expected no DNS update when auto switch disabled, got %d calls", len(updateCalls))
+	}
+	updated, err := store.GetGroupByID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.CurrentNodeID.Valid && updated.CurrentNodeID.String == newNode.ID {
+		t.Fatal("expected current node unchanged when auto switch disabled")
+	}
+}
+
+func TestLookupGroupDNSRecordRespectsAAAA(t *testing.T) {
+	cfg := db.CloudflareConfig{
+		APIToken:   "token",
+		ZoneID:     "zone-1",
+		RecordName: "hk.example.com",
+		RecordType: "AAAA",
+	}
+	dns := fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-aaaa", Type: "AAAA", Name: "hk.example.com", Content: "2001:db8::1", TTL: 60},
+	}
+	rec, err := lookupGroupDNSRecord(context.Background(), dns, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.Type != "AAAA" || rec.Content != "2001:db8::1" {
+		t.Fatalf("unexpected record: %+v", rec)
 	}
 }
 

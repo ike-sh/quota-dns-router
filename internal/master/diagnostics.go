@@ -329,7 +329,7 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 		currentIP := "-"
 		dnsPending := strings.TrimSpace(cfg.RecordName) != "" && strings.TrimSpace(cfg.RecordID) == ""
 		if dns != nil && cfg.ZoneID != "" && cfg.RecordName != "" {
-			if rec, err := dns.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName); err == nil {
+			if rec, err := lookupGroupDNSRecord(ctx, dns, cfg); err == nil {
 				if dnsPending {
 					dnsPending = false
 					cfg.RecordID = rec.ID

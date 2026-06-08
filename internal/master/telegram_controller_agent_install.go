@@ -132,7 +132,7 @@ func (c *TelegramController) buildAgentInstallWarnings(ctx context.Context, grou
 	}
 	if strings.TrimSpace(cfg.RecordID) == "" {
 		if c.DNS != nil && strings.TrimSpace(cfg.ZoneID) != "" && strings.TrimSpace(cfg.APIToken) != "" {
-			record, lookupErr := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+			record, lookupErr := lookupGroupDNSRecord(ctx, c.DNS, cfg)
 			if lookupErr == nil {
 				cfg.RecordID = record.ID
 				_, _ = c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, record.Name, record.ID, dnsRecordType(cfg, record.Type), cfg.TTL, cfg.Proxied, cfg.AllowOverride)
@@ -148,7 +148,7 @@ func (c *TelegramController) buildAgentInstallWarnings(ctx context.Context, grou
 	if c.DNS == nil || strings.TrimSpace(cfg.ZoneID) == "" || strings.TrimSpace(cfg.APIToken) == "" {
 		return true, nil, nil
 	}
-	record, err := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+	record, err := lookupGroupDNSRecord(ctx, c.DNS, cfg)
 	if err != nil {
 		return true, nil, nil
 	}

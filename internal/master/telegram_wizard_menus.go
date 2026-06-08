@@ -106,13 +106,6 @@ func dnsPanelMenu(items ...DNSSummary) *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 
-func dnsNoGroupMenu() *telegram.ReplyMarkup {
-	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
-		{{Text: "创建分组", CallbackData: "groups_new"}},
-		{{Text: "返回主菜单", CallbackData: "menu"}},
-	}}
-}
-
 func dnsNeedNodeMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "添加节点", CallbackData: "nodes_add"}},

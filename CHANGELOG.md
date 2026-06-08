@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.2.3.3
+
+- 修复 `AutoSwitchEnabled` 关闭后仍自动切换 DNS 的逻辑缺陷。
+- AAAA 记录在诊断/节点匹配/手动切换等路径按 `RecordType` 查询，不再硬编码 A 类型。
+- `OfflineNotifySeconds` 与 `AgentOfflineSeconds` 分离；env `QDR_*_OFFLINE_*` 启动时同步到 DB 策略。
+- Agent 上报有效公网 IP 时同步更新 `nodes.public_ip`。
+- 切换成功通知文案改为 `DNS：已确认`；清理 12 处孤立代码。
+
 ## 0.2.3.2
 
 - 新增 [`docs/telegram-ops-cheatsheet.md`](docs/telegram-ops-cheatsheet.md)：Telegram 命令速查与扩展告警场景排查表。

@@ -87,33 +87,6 @@ func getInt(values map[string]string, key string, fallback int) (int, error) {
 	return n, nil
 }
 
-func getInt64(values map[string]string, key string, fallback int64) (int64, error) {
-	v := strings.TrimSpace(values[key])
-	if v == "" {
-		return fallback, nil
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("%s 不是有效整数", key)
-	}
-	return n, nil
-}
-
-func getBool(values map[string]string, key string, fallback bool) (bool, error) {
-	v := strings.TrimSpace(values[key])
-	if v == "" {
-		return fallback, nil
-	}
-	switch strings.ToLower(v) {
-	case "1", "true", "yes", "y", "on":
-		return true, nil
-	case "0", "false", "no", "n", "off":
-		return false, nil
-	default:
-		return false, fmt.Errorf("%s 不是有效布尔值", key)
-	}
-}
-
 func getDuration(values map[string]string, key string, fallback time.Duration) (time.Duration, error) {
 	v := strings.TrimSpace(values[key])
 	if v == "" {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.2.3.2"
+VERSION="0.2.3.3"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -47,7 +47,7 @@ usage() {
   QDR_INSTALL_MODE           安装模式：binary / source / auto，默认 binary
   QDR_ALLOW_SOURCE_FALLBACK  auto + --yes 时允许失败后继续 source，设为 1 开启
   QDR_REPO                   GitHub 仓库，默认 https://github.com/ike-sh/quota-dns-router
-  QDR_BRANCH                 Git 分支或标签，默认 v0.2.3.2
+  QDR_BRANCH                 Git 分支或标签，默认 v0.2.3.3
   QDR_GO_VERSION             官方 Go tarball 版本，默认 1.25.0
 EOF
 }

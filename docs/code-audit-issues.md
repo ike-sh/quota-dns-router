@@ -58,6 +58,40 @@
 ### #A11 NewBot / NewBotForAdmins 兼容包装
 - **状态**：保留，生产路径使用 `NewBotForRoles`
 
+## v0.2.3.3 审计（2026-06）
+
+### ✅ #B1 AutoSwitchEnabled 未生效
+- **问题**：策略面板可关闭自动切换，但 `HandleGroup` 不检查该字段
+- **修复**：`!policy.AutoSwitchEnabled` 时跳过 `ExecuteSwitch`
+- **文件**：`internal/master/logic.go`
+
+### ✅ #B2 AAAA 查询硬编码 A 类型
+- **问题**：`LookupDNSRecord` 固定查 A 记录，AAAA 分组 DNS 匹配/诊断失败
+- **修复**：新增 `lookupGroupDNSRecord`，全路径改用 `LookupDNSRecordWithType`
+- **文件**：`logic.go`、`diagnostics.go`、`telegram_wizard_nodes.go`、`telegram_detail_panels.go`、`telegram_controller_*.go`
+
+### ✅ #B3 OfflineNotifySeconds 未使用
+- **问题**：Policy 字段存在但 `CheckOfflineNodes` 与离线判定共用 `AgentOfflineSeconds`
+- **修复**：离线标记与通知分离；`OpenRuntime` 将 env `QDR_AGENT_OFFLINE_AFTER` / `QDR_OFFLINE_NOTIFY_AFTER` 同步到策略
+- **文件**：`logic.go`、`runner.go`
+
+### ✅ #B4 MasterConfig 孤立 env 字段
+- **问题**：`AgentOfflineAfter` / `OfflineNotifyAfter` 加载后零引用
+- **修复**：启动时写入 DB Policy（见 #B3）
+
+### ✅ #B5 switchOKMessage 硬编码 Cloudflare
+- **修复**：改为 `DNS：已确认`
+- **文件**：`logic.go`
+
+### ✅ #B6 Agent 上报 IP 不同步
+- **问题**：`SaveAgentReport` 不更新 `nodes.public_ip`，IP 变化后 DNS 匹配失效
+- **修复**：有效上报 IP 写入节点表
+- **文件**：`internal/db/store.go`
+
+### ✅ #B7 孤立代码清理（12 处）
+- **删除**：`getInt64`/`getBool`、`ListCloudflareConfigs`、Telegram 未引用包装函数、`dnsNoGroupMenu` 等
+- **保留**：`NewBot` / `NewBotForAdmins` 兼容包装（#A11）
+
 ## 验证
 
 ```bash

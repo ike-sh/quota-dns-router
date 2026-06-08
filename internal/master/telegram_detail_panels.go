@@ -323,7 +323,7 @@ func (c *TelegramController) saveDNSOptions(ctx context.Context, groupID string,
 
 func (c *TelegramController) lookupDNSCurrentIP(ctx context.Context, group db.Group, cfg db.CloudflareConfig) (string, error) {
 	if c.DNS != nil && strings.TrimSpace(cfg.ZoneID) != "" && strings.TrimSpace(cfg.APIToken) != "" && strings.TrimSpace(cfg.RecordName) != "" {
-		record, err := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+		record, err := lookupGroupDNSRecord(ctx, c.DNS, cfg)
 		if err == nil {
 			return record.Content, nil
 		}

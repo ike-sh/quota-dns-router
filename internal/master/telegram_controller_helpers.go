@@ -57,10 +57,6 @@ func nodesHelp() string {
 func dnsHelp() string {
 	return "DNS 命令：/dns set <分组名> <A记录> [ttl=60|1(auto)] [proxied=false] [record_id=xxx]"
 }
-func cfHelp() string {
-	return "Cloudflare：发送 /cf <Token> <Zone Name> [Zone ID]。\n如果不提供 Zone ID，程序会自动查询。"
-}
-func agentHelp() string { return "Agent 安装：/agent install <节点名>" }
 func policyHelp() string {
 	return "策略命令：/policy set threshold=80 quota=1000GB reset_day=1 mode=both offline=300 auto_switch=true notify_only=false repo=<install-agent-url>"
 }

@@ -80,7 +80,7 @@ smoke_master() {
   echo "Master 验收检查"
   check "Master 二进制存在" check_file_exists "$bin"
   check "Master 版本输出" "$bin" version
-  check "Master 版本为 0.2.3.2" check_version_contains "$bin" "0.2.3.2"
+  check "Master 版本为 0.2.3.3" check_version_contains "$bin" "0.2.3.3"
   check "Master systemd 正在运行" check_systemd quota-dns-router-master.service
   check "master.env 存在且权限安全" check_env_permissions "${ETC_DIR}/master.env"
   check "数据目录存在且权限合理" check_data_permissions "$DATA_DIR"
@@ -97,7 +97,7 @@ smoke_agent() {
   echo "Agent 验收检查"
   check "Agent 二进制存在" check_file_exists "$bin"
   check "Agent 版本输出" "$bin" version
-  check "Agent 版本为 0.2.3.2" check_version_contains "$bin" "0.2.3.2"
+  check "Agent 版本为 0.2.3.3" check_version_contains "$bin" "0.2.3.3"
   check "Agent systemd 正在运行" check_systemd quota-dns-router-agent.service
   check "agent.env 存在且权限安全" check_env_permissions "${ETC_DIR}/agent.env"
   check "数据目录存在且权限合理" check_data_permissions "$DATA_DIR"

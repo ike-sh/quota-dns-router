@@ -12,10 +12,6 @@ import (
 	"quota-dns-router-go/internal/telegram"
 )
 
-func (c *TelegramController) sendMasterURLPrompt(ctx context.Context, chatID int64) error {
-	return c.sendMasterURLPromptWithPrefix(ctx, chatID, "")
-}
-
 func (c *TelegramController) sendMasterURLPromptWithPrefix(ctx context.Context, chatID int64, prefix string) error {
 	suggested := c.ensureSuggestedMasterPublicURL(ctx)
 	return c.sendPromptAndTrack(ctx, chatID, pendingMasterURL, prefix+masterURLHelp(suggested), masterURLPromptMenu(suggested))
@@ -135,28 +131,30 @@ func (c *TelegramController) configureDNSRecord(ctx context.Context, group db.Gr
 			return "", "", err
 		}
 	}
+	recordType := GroupDNSRecordType(ctx, c.Store, group.ID)
 	currentIP := ""
 	if strings.TrimSpace(recordID) == "" {
 		if c.DNS == nil {
 			return "", "", fmt.Errorf("当前进程未配置 Cloudflare 客户端，无法自动查询 Record ID")
 		}
-		record, err := c.DNS.LookupDNSRecord(ctx, token, zoneID, recordName)
+		record, err := c.DNS.LookupDNSRecordWithType(ctx, token, zoneID, recordName, recordType)
 		if err != nil {
 			if any, anyErr := c.DNS.LookupDNSRecordAnyType(ctx, token, zoneID, recordName); anyErr == nil {
-				msg := fmt.Sprintf("记录存在，但类型为 %s，不是 A 记录", any.Type)
+				msg := fmt.Sprintf("记录存在，但类型为 %s，不是 %s 记录", any.Type, recordType)
 				_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 记录类型错误")
 				_ = c.Store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, token)
 				return "", "", errors.New(msg)
 			}
-			msg := "未找到 DNS A 记录，请确认记录存在"
+			msg := fmt.Sprintf("未找到 DNS %s 记录，请确认记录存在", recordType)
 			_ = c.Store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 查询失败")
 			_ = c.Store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, token)
 			return "", "", errors.New(msg)
 		}
 		recordID = record.ID
 		currentIP = record.Content
+		recordType = dnsRecordType(db.CloudflareConfig{RecordType: recordType}, record.Type)
 	}
-	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, recordID, "A", ttl, proxied, true)
+	cfg, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, recordName, recordID, recordType, ttl, proxied, true)
 	if err != nil {
 		_ = c.Store.SaveLastError(ctx, errorKeyDNSUpdate(group.ID), err.Error(), token)
 		return "", "", err

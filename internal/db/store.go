@@ -646,26 +646,6 @@ func (s *Store) CountCloudflareConfigs(ctx context.Context) (int, error) {
 	return count, err
 }
 
-func (s *Store) ListCloudflareConfigs(ctx context.Context) ([]CloudflareConfig, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, group_id, api_token, zone_name, zone_id, record_name, record_id, record_type, allow_override, ttl, proxied, created_at, updated_at
-		FROM cloudflare_configs ORDER BY record_name
-	`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []CloudflareConfig
-	for rows.Next() {
-		var cfg CloudflareConfig
-		if err := rows.Scan(&cfg.ID, &cfg.GroupID, &cfg.APIToken, &cfg.ZoneName, &cfg.ZoneID, &cfg.RecordName, &cfg.RecordID, &cfg.RecordType, &cfg.AllowOverride, &cfg.TTL, &cfg.Proxied, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, cfg)
-	}
-	return out, rows.Err()
-}
-
 func (s *Store) CreateOrUpdateCloudflareConfig(ctx context.Context, groupID, recordName, recordID, recordType string, ttl int, proxied, allowOverride bool) (CloudflareConfig, error) {
 	if recordType == "" {
 		recordType = "A"
@@ -1011,14 +991,19 @@ func (s *Store) SaveAgentReport(ctx context.Context, report AgentReport) error {
 	`, report.ID, report.AgentID, report.Hostname, report.PublicIP, report.Iface, report.RXBytesTotal, report.TXBytesTotal, report.RXDelta, report.TXDelta, report.ReportedAt, report.AgentVersion, report.Status); err != nil {
 		return err
 	}
+	publicIP := strings.TrimSpace(node.PublicIP)
+	if reportedIP := strings.TrimSpace(report.PublicIP); reportedIP != "" && !strings.EqualFold(reportedIP, "unknown") {
+		publicIP = reportedIP
+	}
 	if _, err = tx.ExecContext(ctx, `
 		UPDATE nodes
 		SET online = 1,
+		    public_ip = ?,
 		    last_reported_at = ?,
 		    first_seen_at = COALESCE(first_seen_at, ?),
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, report.ReportedAt, report.ReportedAt, node.ID); err != nil {
+	`, publicIP, report.ReportedAt, report.ReportedAt, node.ID); err != nil {
 		return err
 	}
 	cycle := BillingCycleStart(report.ReportedAt, node.ResetDay).Format("2006-01-02")

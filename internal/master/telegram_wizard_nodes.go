@@ -101,10 +101,6 @@ func (c *TelegramController) startNodePolicyPrompt(ctx context.Context, chatID i
 	return c.sendPromptAndTrack(ctx, chatID, pendingNodeQuota, "请发送月流量，例如：500GB、1TB、1000GB。\n\n可直接点击默认值。", nodeQuotaMenu())
 }
 
-func (c *TelegramController) startNodePolicyEditWizard(ctx context.Context, chatID int64, nodeID string) error {
-	return c.sendNodePolicyEditPanel(ctx, chatID, nodeID, "")
-}
-
 func (c *TelegramController) sendNodePolicyEditPanel(ctx context.Context, chatID int64, nodeID, prefix string) error {
 	node, err := c.Store.GetNodeByID(ctx, nodeID)
 	if err != nil {
@@ -471,7 +467,7 @@ func (c *TelegramController) nodeDNSMatches(ctx context.Context, group db.Group,
 		return false, err
 	}
 	if c.DNS != nil && strings.TrimSpace(cfg.ZoneID) != "" && strings.TrimSpace(cfg.APIToken) != "" && strings.TrimSpace(cfg.RecordName) != "" {
-		record, err := c.DNS.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+		record, err := lookupGroupDNSRecord(ctx, c.DNS, cfg)
 		if err == nil {
 			return strings.TrimSpace(record.Content) == strings.TrimSpace(node.PublicIP), nil
 		}
