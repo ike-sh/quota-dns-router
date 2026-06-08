@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -40,10 +41,15 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 		_ = store.Close()
 		return nil, err
 	}
-	if strings.EqualFold(cfg.DNSProvider, "route53") {
+	dnsProvider := strings.ToLower(strings.TrimSpace(cfg.DNSProvider))
+	if dnsProvider == "" {
+		dnsProvider = "cloudflare"
+	}
+	_ = store.SetSetting(ctx, "dns_provider", dnsProvider)
+	if IsRoute53Provider(dnsProvider) {
 		token, _, _, _ := store.GetCloudflareDefaults(ctx)
 		if strings.TrimSpace(token) == "" {
-			_ = store.SaveCloudflareDefaults(ctx, route53PlaceholderToken, "", "")
+			_ = store.SaveCloudflareDefaults(ctx, Route53PlaceholderToken, "", "")
 		}
 	}
 	if cfg.SuggestedPublicAPIURL != "" {
@@ -79,12 +85,25 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 	defer runtime.Close()
 	_ = runtime.Bot.SendAdminMessage(ctx, "quota-dns-router Master 已启动。发送 /start 继续初始化配置。")
 
-	errCh := make(chan error, 3)
 	svc := NewService(runtime.Store, runtime.Bot, runtime.DNS)
-	go func() {
-		errCh <- StartHTTP(ctx, cfg, runtime.Store, svc)
-	}()
-	go func() {
+	controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS, cfg.DNSProvider)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, 3)
+	startWorker := func(name string, fn func() error) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := fn(); err != nil && err != context.Canceled {
+				select {
+				case errCh <- fmt.Errorf("%s: %w", name, err):
+				default:
+				}
+			}
+		}()
+	}
+	startWorker("http", func() error { return StartHTTP(ctx, cfg, runtime.Store, svc) })
+	startWorker("telegram", func() error {
 		if me, err := runtime.Bot.GetMe(ctx); err == nil {
 			if me.Username != "" {
 				fmt.Fprintf(os.Stdout, "Telegram bot connected: @%s\n", me.Username)
@@ -95,18 +114,16 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 			fmt.Fprintf(os.Stderr, "Telegram getMe failed: %v\n", err)
 		}
 		fmt.Fprintln(os.Stdout, "Telegram long polling started")
-		controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS, cfg.DNSProvider)
-		errCh <- controller.Run(ctx)
-	}()
-	go func() {
+		return controller.Run(ctx)
+	})
+	startWorker("scheduler", func() error {
 		ticker := time.NewTicker(cfg.CheckInterval)
 		defer ticker.Stop()
 		var lastReportPurge time.Time
 		for {
 			select {
 			case <-ctx.Done():
-				errCh <- ctx.Err()
-				return
+				return ctx.Err()
 			case <-ticker.C:
 				if err := svc.CheckOfflineNodes(ctx); err != nil {
 					slog.Error("offline check failed", "error", err)
@@ -125,8 +142,20 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 				}
 			}
 		}
-	}()
+	})
+
 	err = <-errCh
+	stop()
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		slog.Warn("master shutdown timeout waiting for workers")
+	}
 	if err == context.Canceled {
 		return nil
 	}
@@ -134,6 +163,7 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 }
 
 func TelegramRun(ctx context.Context, cfg config.MasterConfig) error {
+	fmt.Fprintln(os.Stderr, "警告：telegram-run 仅启动 Telegram Bot，不启动 HTTP API、离线检查与自动切换。生产环境请使用 qdr-master run。")
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	runtime, err := OpenRuntime(ctx, cfg)

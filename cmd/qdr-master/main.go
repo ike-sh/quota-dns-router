@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"quota-dns-router-go/internal/cloudflare"
 	"quota-dns-router-go/internal/config"
 	"quota-dns-router-go/internal/db"
 	"quota-dns-router-go/internal/master"
@@ -39,6 +38,7 @@ func run(args []string) error {
 		}
 		return master.Run(context.Background(), cfg)
 	case "telegram-run":
+		fmt.Fprintln(os.Stderr, "警告：telegram-run 仅启动 Telegram Bot，不启动 HTTP API、离线检查与自动切换。生产环境请使用 qdr-master run。")
 		loadPath := ""
 		if cfgPathProvided {
 			loadPath = cfgPath
@@ -69,7 +69,11 @@ func run(args []string) error {
 			return err
 		}
 		defer store.Close()
-		overview, err := master.BuildStatusOverview(context.Background(), store, cfg.PublicAPIURL, cloudflare.NewClient(nil), now())
+		dns, err := master.NewDNSProvider(cfg.DNSProvider, cfg.AWSRegion)
+		if err != nil {
+			return err
+		}
+		overview, err := master.BuildStatusOverview(context.Background(), store, cfg.PublicAPIURL, dns, now())
 		if err != nil {
 			return err
 		}
@@ -84,7 +88,11 @@ func run(args []string) error {
 			return err
 		}
 		defer store.Close()
-		overview, err := master.BuildStatusOverview(context.Background(), store, cfg.PublicAPIURL, cloudflare.NewClient(nil), now())
+		dns, err := master.NewDNSProvider(cfg.DNSProvider, cfg.AWSRegion)
+		if err != nil {
+			return err
+		}
+		overview, err := master.BuildStatusOverview(context.Background(), store, cfg.PublicAPIURL, dns, now())
 		if err != nil {
 			return err
 		}
@@ -181,7 +189,8 @@ func openStore(cfg config.MasterConfig) (*db.Store, error) {
 func formatMasterConfigCheck(cfg config.MasterConfig, overview master.StatusOverview) string {
 	status := overview.Setup
 	out := fmt.Sprintf("配置检查通过：%s\nMaster Public API URL: %s\n", cfg.String(), status.PublicAPIURL)
-	out += fmt.Sprintf("Cloudflare Token: %s\n", ternary(status.CloudflareTokenConfigured, "已配置 "+status.CloudflareTokenMasked, "未配置"))
+	out += fmt.Sprintf("DNS 服务商: %s\n", blankAsDash(status.DNSProviderKind))
+	out += fmt.Sprintf("%s: %s\n", master.DNSCredentialLabel(status.DNSProviderKind), ternary(status.CloudflareTokenConfigured, "已配置 "+status.CloudflareTokenMasked, "未配置"))
 	out += fmt.Sprintf("Zone: %s / %s\n", blankAsDash(status.ZoneName), blankAsDash(status.ZoneID))
 	out += fmt.Sprintf("Zone 验证: %s\n", blankAsDash(overview.Cloudflare.Status))
 	out += fmt.Sprintf("DNS A 记录配置数: %d\n", status.DNSConfigCount)

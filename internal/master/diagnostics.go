@@ -12,7 +12,8 @@ import (
 const (
 	errorKeyCloudflareZone  = "cloudflare_zone_lookup"
 	errorKeyAgentInstall    = "agent_install_command"
-	errorKeyAgentReportAuth = "agent_report_auth"
+	errorKeyAgentReportAuth      = "agent_report_auth"
+	errorKeyAgentTrafficMode     = "agent_traffic_mode_mismatch"
 	errorKeyNotification    = "notification_delivery"
 	noteKeyCloudflareZone   = "cloudflare_zone_result"
 )

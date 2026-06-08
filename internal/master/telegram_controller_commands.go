@@ -97,7 +97,7 @@ func (c *TelegramController) handleNodesCommand(ctx context.Context, chatID int6
 				node.AutoSwitch = parseBool(v, true)
 			}
 		}
-		if err := ValidateNodeConfig(node); err != nil {
+		if err := ValidateNodeConfig(node, GroupDNSRecordType(ctx, c.Store, node.GroupID)); err != nil {
 			return c.sendMessageOrEdit(ctx, chatID, err.Error(), nil)
 		}
 		created, err := c.Store.CreateNode(ctx, node)

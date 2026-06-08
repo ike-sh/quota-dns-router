@@ -64,8 +64,9 @@ func (c *TelegramController) handleNodeNameInput(ctx context.Context, chatID int
 	}
 	c.setSessionValue(chatID, sessionKeyNodeName, nodeName)
 	c.completePrompt(ctx, chatID)
+	recordType := GroupDNSRecordType(ctx, c.Store, c.currentSessionValue(chatID, sessionKeyGroupID))
 	c.setSession(chatID, pendingNodeIP)
-	return c.sendPromptAndTrack(ctx, chatID, pendingNodeIP, "请发送节点公网 IP。\n\n要求：\n- 仅支持 IPv4\n- 不允许私网 IP、localhost、127.0.0.1\n\n发送 /cancel 取消。", nil)
+	return c.sendPromptAndTrack(ctx, chatID, pendingNodeIP, nodeIPPrompt(recordType), nil)
 }
 
 func (c *TelegramController) handleNodeIPInput(ctx context.Context, chatID int64, ipText string) error {
@@ -74,9 +75,10 @@ func (c *TelegramController) handleNodeIPInput(ctx context.Context, chatID int64
 		return err
 	}
 	ipText = strings.TrimSpace(ipText)
-	if err := ValidatePublicIPv4(ipText); err != nil {
+	recordType := GroupDNSRecordType(ctx, c.Store, c.currentSessionValue(chatID, sessionKeyGroupID))
+	if err := ValidatePublicIP(ipText, recordType); err != nil {
 		c.setSession(chatID, pendingNodeIP)
-		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送公网 IPv4。", nil)
+		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新发送公网 IP。", nil)
 	}
 	c.setSessionValue(chatID, sessionKeyNodeIP, ipText)
 	c.setSessionValue(chatID, sessionKeyNodePolicySource, "default")
@@ -186,7 +188,7 @@ func (c *TelegramController) saveNodePolicyFieldEdit(ctx context.Context, chatID
 	node.ResetDay = resetDay
 	node.TrafficMode = c.currentSessionValue(chatID, sessionKeyNodeTrafficMode)
 	node.Priority = priority
-	if err := ValidateNodeConfig(node); err != nil {
+	if err := ValidateNodeConfig(node, GroupDNSRecordType(ctx, c.Store, node.GroupID)); err != nil {
 		field := c.currentSessionValue(chatID, sessionKeyNodeEditField)
 		return c.startNodePolicyFieldEdit(ctx, chatID, nodeID, field)
 	}
@@ -359,7 +361,7 @@ func (c *TelegramController) handleNodeConfirm(ctx context.Context, chatID int64
 		PreferredIface:        "auto",
 		ReportIntervalSeconds: policy.AgentReportIntervalSeconds,
 	}
-	if err := ValidateNodeConfig(node); err != nil {
+	if err := ValidateNodeConfig(node, GroupDNSRecordType(ctx, c.Store, groupID)); err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
 		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点信息。", nodeCreateConfirmMenu())
 	}
@@ -390,7 +392,7 @@ func (c *TelegramController) handleNodeSavePolicy(ctx context.Context, chatID in
 	node.ResetDay = resetDay
 	node.TrafficMode = c.currentSessionValue(chatID, sessionKeyNodeTrafficMode)
 	node.Priority = priority
-	if err := ValidateNodeConfig(node); err != nil {
+	if err := ValidateNodeConfig(node, GroupDNSRecordType(ctx, c.Store, node.GroupID)); err != nil {
 		c.setSession(chatID, pendingNodeConfirm)
 		return c.sendMessageOrEdit(ctx, chatID, "❌ "+err.Error()+"\n\n请重新填写节点策略。", nodePolicyConfirmMenu())
 	}

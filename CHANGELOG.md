@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## 0.2.3
+
+- 代码审查修复：AAAA + IPv6 节点校验闭环；CLI `status`/`config-check` 使用 `NewDNSProvider`。
+- Agent `status` 显示真实 `traffic_mode`；安装脚本 URL 随版本动态生成。
+- Web 状态面板：未配置 Token 时仅允许 localhost 访问。
+- Route53：`dns_provider` 持久化到 settings，诊断面板区分 Cloudflare / Route53 凭证语义。
+- Agent 上报 `traffic_mode` 与节点配置不一致时记录告警。
+- Master `run` 优雅关闭：首个 worker 退出后取消 context 并等待其余 worker（10s 超时）。
+- `telegram-run` 启动时输出废弃警告；删除孤立 `internal/system/systemd.go`。
+
 ## 0.2.2
 
 - Route53 DNS adapter（`QDR_DNS_PROVIDER=route53`，凭证走 AWS 默认链）。

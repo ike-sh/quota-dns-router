@@ -49,8 +49,8 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 		return err
 	}
 	if c.isRoute53Provider() && strings.TrimSpace(token) == "" {
-		_ = c.Store.SaveCloudflareDefaults(ctx, route53PlaceholderToken, "", "")
-		token = route53PlaceholderToken
+		_ = c.Store.SaveCloudflareDefaults(ctx, Route53PlaceholderToken, "", "")
+		token = Route53PlaceholderToken
 	}
 	if strings.TrimSpace(token) == "" {
 		return c.sendMessageOrEdit(ctx, chatID, prefix+"请先配置 Cloudflare Token。", dnsProviderNeedTokenMenu(c.DNSProviderKind))

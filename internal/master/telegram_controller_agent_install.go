@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"quota-dns-router-go/internal/db"
+	"quota-dns-router-go/internal/version"
 )
 
 func (c *TelegramController) createAgentInstallCommand(ctx context.Context, nodeID string, policy db.Policy) (string, time.Time, []string, error) {
@@ -243,7 +244,7 @@ func formatNodeTrafficOffsetSavedMessage(node db.Node, usage db.NodeUsage) strin
 }
 
 func agentUninstallCommand() string {
-	return "bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes"
+	return "bash <(curl -fsSL " + version.DefaultUninstallAgentURL() + ") --yes"
 }
 
 func (c *TelegramController) sendNodeCreatedSummary(ctx context.Context, chatID int64, node db.Node) error {

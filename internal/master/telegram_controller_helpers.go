@@ -6,6 +6,7 @@ import (
 
 	"quota-dns-router-go/internal/db"
 	"quota-dns-router-go/internal/telegram"
+	"quota-dns-router-go/internal/version"
 )
 
 func mainMenu() *telegram.ReplyMarkup {
@@ -120,7 +121,7 @@ func normalizeMode(v string) string {
 
 func installURL(policy db.Policy) string {
 	if policy.RepoInstallURL == "" {
-		return "https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-agent.sh"
+		return version.DefaultInstallAgentURL()
 	}
 	return policy.RepoInstallURL
 }

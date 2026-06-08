@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"quota-dns-router-go/internal/config"
 	"quota-dns-router-go/internal/db"
 )
 
@@ -13,6 +12,7 @@ type SetupStatus struct {
 	PublicAPIURL              string
 	PublicURLConfigured       bool
 	PublicURLWarning          string
+	DNSProviderKind           string
 	CloudflareTokenMasked     string
 	CloudflareTokenConfigured bool
 	ZoneName                  string
@@ -55,6 +55,10 @@ func BuildSetupStatus(ctx context.Context, store *db.Store, fallbackPublicURL st
 	if err != nil {
 		return SetupStatus{}, err
 	}
+	dnsProvider, _ := store.GetSetting(ctx, "dns_provider")
+	if strings.TrimSpace(dnsProvider) == "" {
+		dnsProvider = "cloudflare"
+	}
 	publicURLConfigured := false
 	publicURLWarning := MasterPublicURLWarning(publicURL)
 	if _, err := ValidateMasterPublicURL(publicURL); err == nil && !IsLocalMasterPublicURL(publicURL) {
@@ -65,8 +69,9 @@ func BuildSetupStatus(ctx context.Context, store *db.Store, fallbackPublicURL st
 		PublicAPIURL:              publicURL,
 		PublicURLConfigured:       publicURLConfigured,
 		PublicURLWarning:          publicURLWarning,
-		CloudflareTokenMasked:     config.MaskSecret(token),
-		CloudflareTokenConfigured: strings.TrimSpace(token) != "",
+		DNSProviderKind:           dnsProvider,
+		CloudflareTokenMasked:     DNSCredentialMasked(dnsProvider, token),
+		CloudflareTokenConfigured: DNSCredentialConfigured(dnsProvider, token, zoneID),
 		ZoneName:                  zoneName,
 		ZoneID:                    zoneID,
 		DNSConfigCount:            dnsCount,
@@ -86,7 +91,7 @@ func MissingSetupItems(status SetupStatus) []string {
 		missing = append(missing, "Master 公网地址")
 	}
 	if !status.CloudflareTokenConfigured {
-		missing = append(missing, "Cloudflare Token")
+		missing = append(missing, DNSCredentialLabel(status.DNSProviderKind))
 	}
 	if strings.TrimSpace(status.ZoneName) == "" {
 		missing = append(missing, "Zone Name")

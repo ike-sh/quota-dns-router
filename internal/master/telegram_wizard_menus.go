@@ -2,7 +2,6 @@ package master
 
 import (
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -556,21 +555,6 @@ func maskMiddle(value string, prefixLen, suffixLen int) string {
 		return config.MaskSecret(value)
 	}
 	return value[:prefixLen] + "****" + value[len(value)-suffixLen:]
-}
-
-func ValidatePublicIPv4(value string) error {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return fmt.Errorf("公网 IPv4 不能为空")
-	}
-	ip := net.ParseIP(value)
-	if ip == nil || ip.To4() == nil {
-		return fmt.Errorf("公网 IPv4 无效")
-	}
-	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() {
-		return fmt.Errorf("请填写可公网访问的 IPv4，不能使用私网地址、localhost 或 127.0.0.1")
-	}
-	return nil
 }
 
 func timeNow() time.Time {

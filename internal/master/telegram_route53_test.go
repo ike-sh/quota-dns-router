@@ -13,7 +13,7 @@ func TestRoute53PanelShowsHostedZoneButtonWithoutToken(t *testing.T) {
 	})
 	controller.DNSProviderKind = "route53"
 	ctx := context.Background()
-	_ = controller.Store.SaveCloudflareDefaults(ctx, route53PlaceholderToken, "", "")
+	_ = controller.Store.SaveCloudflareDefaults(ctx, Route53PlaceholderToken, "", "")
 
 	if err := controller.handleCallback(ctx, 1, "cf"); err != nil {
 		t.Fatal(err)

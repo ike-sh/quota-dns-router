@@ -28,17 +28,41 @@ func TestValidateNodeConfig(t *testing.T) {
 		PreferredIface:        "auto",
 		ReportIntervalSeconds: 60,
 	}
-	if err := ValidateNodeConfig(valid); err != nil {
+	if err := ValidateNodeConfig(valid, "A"); err != nil {
 		t.Fatal(err)
 	}
 	invalid := valid
 	invalid.PublicIP = "bad-ip"
-	if err := ValidateNodeConfig(invalid); err == nil {
+	if err := ValidateNodeConfig(invalid, "A"); err == nil {
 		t.Fatal("expected invalid IP error")
 	}
 	invalid = valid
 	invalid.ThresholdPercent = 0
-	if err := ValidateNodeConfig(invalid); err == nil {
+	if err := ValidateNodeConfig(invalid, "A"); err == nil {
 		t.Fatal("expected threshold error")
+	}
+}
+
+func TestValidatePublicIPv6(t *testing.T) {
+	if err := ValidatePublicIPv6("2001:db8::1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePublicIPv6("203.0.113.10"); err == nil {
+		t.Fatal("expected ipv4 rejected for AAAA")
+	}
+	if err := ValidatePublicIPv6("fe80::1"); err == nil {
+		t.Fatal("expected link-local rejected")
+	}
+}
+
+func TestValidatePublicIPByRecordType(t *testing.T) {
+	if err := ValidatePublicIP("203.0.113.10", "A"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePublicIP("2001:db8::1", "AAAA"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidatePublicIP("203.0.113.10", "AAAA"); err == nil {
+		t.Fatal("expected ipv4 rejected for AAAA group")
 	}
 }

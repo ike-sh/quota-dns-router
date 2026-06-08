@@ -86,3 +86,22 @@
 
 ### ✅ #16 Telegram 只读观察者
 - `QDR_TELEGRAM_OBSERVER_IDS`：可查看状态，不可修改配置
+
+## 代码审查修复（v0.2.3）
+
+> 详见 [`docs/code-audit-issues.md`](code-audit-issues.md)
+
+### ✅ #A1–A5 审计 P0/P1 修复
+- AAAA + IPv6 节点校验闭环
+- CLI 使用 `NewDNSProvider`
+- Agent status 显示真实 traffic_mode
+- 安装 URL 动态版本号
+- Web 状态面板 localhost 默认鉴权
+
+### ✅ #A10 删除孤立 `internal/system/systemd.go`
+
+### ✅ #A6–A9 审计 P2 修复（v0.2.3）
+- Route53 凭证语义清理、`dns_provider` settings
+- telegram-run 废弃警告
+- Agent traffic_mode 一致性告警
+- Runner 优雅关闭

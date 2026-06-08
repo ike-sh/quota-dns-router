@@ -3,6 +3,7 @@ package master
 import (
 	"embed"
 	"io/fs"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -51,10 +52,44 @@ func statusSummaryFromOverview(overview StatusOverview) statusAPISummary {
 	}
 }
 
+func isLocalhostRequest(r *http.Request) bool {
+	if host := requestHostname(r.Host); isLoopbackHost(host) {
+		return true
+	}
+	if host := requestHostname(r.RemoteAddr); isLoopbackHost(host) {
+		return true
+	}
+	return false
+}
+
+func requestHostname(hostport string) string {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return ""
+	}
+	host, _, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = hostport
+	}
+	return strings.Trim(strings.ToLower(host), "[]")
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "" {
+		return false
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 func (s HTTPServer) statusAuthOK(r *http.Request) bool {
 	token := strings.TrimSpace(s.StatusReadonlyToken)
 	if token == "" {
-		return true
+		return isLocalhostRequest(r)
 	}
 	return bearerToken(r.Header.Get("Authorization")) == token
 }

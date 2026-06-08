@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"quota-dns-router-go/internal/config"
+	"quota-dns-router-go/internal/version"
 	rootmigrations "quota-dns-router-go/migrations"
 
 	_ "modernc.org/sqlite"
@@ -385,7 +386,7 @@ func DefaultPolicy() Policy {
 		NotifyOnly:                 false,
 		MaintenanceMode:            false,
 		DefaultSwitchCooldownSecs:  600,
-		RepoInstallURL:             "https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-agent.sh",
+		RepoInstallURL:             version.DefaultInstallAgentURL(),
 	}
 }
 

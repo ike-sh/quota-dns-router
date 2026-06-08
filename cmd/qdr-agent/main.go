@@ -9,6 +9,7 @@ import (
 
 	"quota-dns-router-go/internal/agent"
 	"quota-dns-router-go/internal/config"
+	"quota-dns-router-go/internal/db"
 	"quota-dns-router-go/internal/traffic"
 	"quota-dns-router-go/internal/version"
 )
@@ -107,9 +108,9 @@ Master：%s
 默认路由网卡：%s
 RX：%d
 TX：%d
-统计模式：RX+TX
+统计模式：%s
 最近上报：%s
-`, cfg.MasterAPIURL, cfg.NodeName, valueOrDash(diag.SelectedIface), valueOrDash(diag.RouteIface), diag.Snapshot.RX, diag.Snapshot.TX, lastAt)
+`, cfg.MasterAPIURL, cfg.NodeName, valueOrDash(diag.SelectedIface), valueOrDash(diag.RouteIface), diag.Snapshot.RX, diag.Snapshot.TX, trafficModeLabel(cfg.TrafficMode), lastAt)
 	if diag.Warning != "" {
 		out += diag.Warning + "\n"
 	}
@@ -136,6 +137,17 @@ func formatAgentConfigCheck(cfg config.AgentConfig, diag traffic.Diagnostics) st
 		out += "错误：" + diag.Error + "\n"
 	}
 	return out
+}
+
+func trafficModeLabel(mode string) string {
+	switch mode {
+	case db.TrafficModeRX:
+		return "单向 RX"
+	case db.TrafficModeTX:
+		return "单向 TX"
+	default:
+		return "双向 RX+TX"
+	}
 }
 
 func valueOrDash(v string) string {

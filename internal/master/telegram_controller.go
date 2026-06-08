@@ -9,8 +9,6 @@ import (
 	"quota-dns-router-go/internal/telegram"
 )
 
-const route53PlaceholderToken = "route53:aws-default"
-
 type TelegramController struct {
 	Bot               *telegram.Bot
 	Store             *db.Store

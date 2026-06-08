@@ -18,6 +18,7 @@ func TestServeStatusAPIWithoutToken(t *testing.T) {
 
 	srv := HTTPServer{Store: store, PublicAPIURL: "http://127.0.0.1:8080"}
 	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
 	srv.serveStatusAPI(rec, req)
 
@@ -53,10 +54,23 @@ func TestServeStatusAPIRequiresTokenWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestServeStatusAPIRejectsRemoteWithoutToken(t *testing.T) {
+	store := testMasterStore(t)
+	srv := HTTPServer{Store: store}
+	req := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	req.RemoteAddr = "203.0.113.50:12345"
+	rec := httptest.NewRecorder()
+	srv.serveStatusAPI(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+}
+
 func TestServeStatusUI(t *testing.T) {
 	store := testMasterStore(t)
 	srv := HTTPServer{Store: store}
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	rec := httptest.NewRecorder()
 	srv.serveStatusUI(rec, req)
 	if rec.Code != http.StatusOK {

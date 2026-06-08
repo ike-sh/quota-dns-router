@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -103,6 +104,18 @@ func (s HTTPServer) report(w http.ResponseWriter, r *http.Request) {
 		req.PublicIP = "unknown"
 	}
 	previous, _ := s.Store.GetNodeByAgentID(r.Context(), req.AgentID)
+	if previous.ID != "" && strings.TrimSpace(req.TrafficMode) != "" {
+		if node, nodeErr := s.Store.GetNodeByID(r.Context(), previous.ID); nodeErr == nil {
+			reported := normalizeMode(req.TrafficMode)
+			if reported != node.TrafficMode {
+				msg := fmt.Sprintf("Agent %s 上报 traffic_mode=%s，节点配置为 %s", req.AgentID, reported, node.TrafficMode)
+				slog.Warn("agent traffic_mode mismatch", "agent_id", req.AgentID, "reported", reported, "expected", node.TrafficMode)
+				_ = s.Store.SaveLastError(r.Context(), errorKeyAgentTrafficMode, msg, req.AgentID)
+			} else {
+				_ = s.Store.ClearLastError(r.Context(), errorKeyAgentTrafficMode)
+			}
+		}
+	}
 	err = s.Store.SaveAgentReport(r.Context(), db.AgentReport{
 		AgentID:      req.AgentID,
 		Hostname:     req.Hostname,
