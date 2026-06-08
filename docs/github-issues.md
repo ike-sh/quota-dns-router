@@ -53,6 +53,7 @@
 
 ### ✅ #10 多架构 Release
 - CI 构建 `linux/amd64` + `linux/arm64`
+- 安装脚本支持 amd64/arm64 二进制下载
 - SHA256SUMS 覆盖全部归档
 
 ## P3 — 功能扩展
