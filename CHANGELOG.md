@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.2.2 (unreleased)
+
+- Route53 DNS adapter（`QDR_DNS_PROVIDER=route53`，凭证走 AWS 默认链）。
+- `/api/agent/report` 限流（120 次/分钟 / token 或 IP）。
+- join 限流 map 在条目过多时全局 sweep 过期 key。
+
 ## 0.2.1
 
 - 只读 Web 状态面板：`GET /`、`/status` 与 `GET /api/status` JSON API。

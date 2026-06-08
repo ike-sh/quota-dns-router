@@ -45,7 +45,7 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, suggested)
 	}
 	bot := telegram.NewBotForRoles(cfg.TelegramToken, cfg.TelegramAdminIDs, cfg.TelegramObserverIDs, nil)
-	dns, err := NewDNSProvider(cfg.DNSProvider)
+	dns, err := NewDNSProvider(cfg.DNSProvider, cfg.AWSRegion)
 	if err != nil {
 		_ = store.Close()
 		return nil, err

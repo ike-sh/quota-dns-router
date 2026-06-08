@@ -73,9 +73,10 @@
 
 ## P4 — 可选（按需）
 
-### #14 第二 DNS 服务商（进行中）
-- `NewDNSProvider` 工厂 + `QDR_DNS_PROVIDER` 配置项
-- Cloudflare 为默认实现；Route53 / DNSPod adapter 待贡献（v0.3.0）
+### ✅ #14 第二 DNS 服务商（Route53 基础）
+- `QDR_DNS_PROVIDER=route53` + `QDR_AWS_REGION`
+- AWS 默认凭证链（环境变量 / IAM Role）
+- DNSPod 等待贡献
 
 ### ✅ #15 只读 Web 状态面板
 - `embed.FS` 静态页 `/`、`/status` + `GET /api/status` JSON
@@ -84,7 +85,3 @@
 
 ### ✅ #16 Telegram 只读观察者
 - `QDR_TELEGRAM_OBSERVER_IDS`：可查看状态，不可修改配置
-
-### #14 第二 DNS 服务商（进行中）
-- `NewDNSProvider` 工厂 + `QDR_DNS_PROVIDER` 配置项
-- Cloudflare 为默认实现；Route53/DNSPod adapter 待贡献

@@ -21,6 +21,7 @@ type MasterConfig struct {
 	TelegramAdminIDs      []int64
 	TelegramObserverIDs   []int64
 	DNSProvider           string
+	AWSRegion             string
 	TelegramPollTimeout   time.Duration
 	CheckInterval         time.Duration
 	AgentOfflineAfter     time.Duration
@@ -84,6 +85,7 @@ func LoadMaster(path string) (MasterConfig, error) {
 		TelegramAdminIDs:           adminIDs,
 		TelegramObserverIDs:        observerIDs,
 		DNSProvider:                getString(values, "QDR_DNS_PROVIDER", "cloudflare"),
+		AWSRegion:                  getString(values, "QDR_AWS_REGION", "us-east-1"),
 		TelegramPollTimeout:        pollTimeout,
 		CheckInterval:              checkInterval,
 		AgentOfflineAfter:          offlineAfter,

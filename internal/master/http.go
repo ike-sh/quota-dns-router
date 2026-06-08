@@ -24,6 +24,7 @@ type HTTPServer struct {
 func (s HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
 	joinLimiter := newJoinRateLimiter(10, time.Minute)
+	reportLimiter := newJoinRateLimiter(120, time.Minute)
 	health := HealthChecker{Store: s.Store}
 	mux.HandleFunc("/healthz", health.liveness)
 	mux.HandleFunc("/readyz", health.readiness)
@@ -36,7 +37,9 @@ func (s HTTPServer) Handler() http.Handler {
 		)),
 	)
 	mux.HandleFunc("/api/agent/report",
-		withAccessLog(withMaxBodyBytes(s.report, maxRequestBodyBytes)),
+		withAccessLog(withReportRateLimit(reportLimiter,
+			withMaxBodyBytes(s.report, maxRequestBodyBytes),
+		)),
 	)
 	return mux
 }

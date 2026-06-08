@@ -29,6 +29,11 @@ func newJoinRateLimiter(limit int, window time.Duration) *joinRateLimiter {
 func (l *joinRateLimiter) allow(key string, now time.Time) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	l.purgeLocked(now)
+	return l.allowLocked(key, now)
+}
+
+func (l *joinRateLimiter) allowLocked(key string, now time.Time) bool {
 	cutoff := now.Add(-l.window)
 	times := l.entries[key]
 	filtered := times[:0]
@@ -48,6 +53,26 @@ func (l *joinRateLimiter) allow(key string, now time.Time) bool {
 	filtered = append(filtered, now)
 	l.entries[key] = filtered
 	return true
+}
+
+func (l *joinRateLimiter) purgeLocked(now time.Time) {
+	if len(l.entries) < 256 {
+		return
+	}
+	cutoff := now.Add(-l.window)
+	for key, times := range l.entries {
+		filtered := times[:0]
+		for _, ts := range times {
+			if ts.After(cutoff) {
+				filtered = append(filtered, ts)
+			}
+		}
+		if len(filtered) == 0 {
+			delete(l.entries, key)
+			continue
+		}
+		l.entries[key] = filtered
+	}
 }
 
 func isTrustedProxy(ip string) bool {
@@ -106,15 +131,35 @@ func withAccessLog(next http.HandlerFunc) http.HandlerFunc {
 }
 
 func withJoinRateLimit(limiter *joinRateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	return withRateLimit(limiter, "join", clientIP, next)
+}
+
+func withReportRateLimit(limiter *joinRateLimiter, next http.HandlerFunc) http.HandlerFunc {
+	return withRateLimit(limiter, "report", reportRateLimitKey, next)
+}
+
+func withRateLimit(limiter *joinRateLimiter, kind string, keyFn func(*http.Request) string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		key := keyFn(r)
+		if key == "" {
+			http.Error(w, "无法识别客户端", http.StatusBadRequest)
+			return
+		}
 		now := time.Now()
-		if !limiter.allow(clientIP(r), now) {
-			slog.Warn("join rate limit exceeded", "remote_ip", clientIP(r))
+		if !limiter.allow(key, now) {
+			slog.Warn(kind+" rate limit exceeded", "key", key, "remote_ip", clientIP(r))
 			http.Error(w, "请求过于频繁，请稍后再试", http.StatusTooManyRequests)
 			return
 		}
 		next(w, r)
 	}
+}
+
+func reportRateLimitKey(r *http.Request) string {
+	if token := bearerToken(r.Header.Get("Authorization")); token != "" {
+		return "token:" + token
+	}
+	return "ip:" + clientIP(r)
 }
 
 type statusRecorder struct {

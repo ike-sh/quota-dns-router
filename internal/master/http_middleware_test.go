@@ -1,6 +1,7 @@
 package master
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -82,6 +83,20 @@ func TestClientIPIgnoresForwardedForFromUntrustedPeer(t *testing.T) {
 	req.Header.Set("X-Forwarded-For", "203.0.113.10")
 	if got := clientIP(req); got != "203.0.113.99" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestJoinRateLimiterGlobalPurge(t *testing.T) {
+	limiter := newJoinRateLimiter(10, time.Minute)
+	base := time.Now()
+	for i := 0; i < 300; i++ {
+		limiter.allow(fmt.Sprintf("10.0.%d.%d", i/250, i%250), base.Add(-2*time.Minute))
+	}
+	limiter.allow("198.51.100.10", base)
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if len(limiter.entries) != 1 {
+		t.Fatalf("expected global purge to leave one active key, got %d keys", len(limiter.entries))
 	}
 }
 
