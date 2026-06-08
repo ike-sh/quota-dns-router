@@ -9,6 +9,8 @@
 - Agent 上报 `traffic_mode` 与节点配置不一致时记录告警。
 - Master `run` 优雅关闭：首个 worker 退出后取消 context 并等待其余 worker（10s 超时）。
 - `telegram-run` 启动时输出废弃警告；删除孤立 `internal/system/systemd.go`。
+- Agent `traffic_mode` 不一致时 Telegram 通知（`notifyOnce` 去重）。
+- AAAA/IPv6 Telegram 向导 E2E 测试；[`docs/production-checklist.md`](docs/production-checklist.md) 生产部署清单。
 
 ## 0.2.2
 

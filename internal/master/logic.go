@@ -367,6 +367,25 @@ func (s *Service) CheckOfflineNodes(ctx context.Context) error {
 	return nil
 }
 
+func trafficModeMismatchTarget(agentID string) string {
+	return "traffic_mode:" + strings.TrimSpace(agentID)
+}
+
+func (s *Service) HandleTrafficModeMismatch(ctx context.Context, agentID, nodeName, reported, expected string) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return
+	}
+	message := fmt.Sprintf(
+		"⚠️ Agent traffic_mode 不一致\n\nAgent：%s\n节点：%s\n上报模式：%s\n节点配置：%s\n\n请检查 Agent env 中的 QDR_AGENT_TRAFFIC_MODE，或更新节点策略后重新 join。",
+		agentID,
+		valueOrDash(nodeName),
+		modeLabel(reported),
+		modeLabel(expected),
+	)
+	_, _ = s.notifyOnce(ctx, "traffic_mode_mismatch", trafficModeMismatchTarget(agentID), message, "")
+}
+
 func (s *Service) HandleAgentRecovery(ctx context.Context, previous, current db.Node) error {
 	if !previous.LastReportedAt.Valid {
 		return nil

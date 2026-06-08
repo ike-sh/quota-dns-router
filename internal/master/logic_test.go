@@ -433,6 +433,19 @@ func TestNotificationFailureRecordsLastErrorWithoutBlocking(t *testing.T) {
 	}
 }
 
+func TestHandleTrafficModeMismatchNotifiesOnce(t *testing.T) {
+	notifier := &fakeNotifier{}
+	svc := NewService(testMasterStore(t), notifier, nil)
+	ctx := context.Background()
+
+	svc.HandleTrafficModeMismatch(ctx, "agent-1", "hk-01", db.TrafficModeTX, db.TrafficModeRX)
+	svc.HandleTrafficModeMismatch(ctx, "agent-1", "hk-01", db.TrafficModeTX, db.TrafficModeRX)
+
+	if count := countMessagesContaining(notifier.messages, "traffic_mode"); count != 1 {
+		t.Fatalf("expected notifyOnce semantics, got %d messages=%v", count, notifier.messages)
+	}
+}
+
 func reportFor(agentID, publicIP string, used int64, at time.Time) db.AgentReport {
 	return db.AgentReport{
 		AgentID:      agentID,

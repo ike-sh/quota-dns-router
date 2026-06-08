@@ -360,6 +360,72 @@ func TestNodesWizardCreatesNode(t *testing.T) {
 	}
 }
 
+func TestNodesWizardCreatesAAAANode(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "ipv6", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "ipv6.example.com", "rec-aaaa", "AAAA", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []func() error{
+		func() error { return controller.handleCallback(ctx, 1, "nodes_add") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_group:"+group.ID) },
+		func() error { return controller.handleText(ctx, 1, "ipv6-01") },
+		func() error { return controller.handleText(ctx, 1, "2001:db8::1") },
+		func() error { return controller.handleCallback(ctx, 1, "nodes_confirm") },
+	} {
+		if err := action(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	node, err := controller.Store.GetNodeByName(ctx, "ipv6-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.PublicIP != "2001:db8::1" {
+		t.Fatalf("expected ipv6 node ip, got %+v", node)
+	}
+	if !rec.contains("IPv6") {
+		t.Fatalf("expected ipv6 prompt in flow, got %v", rec.payloads)
+	}
+}
+
+func TestNodesWizardRejectsIPv4ForAAAAGroup(t *testing.T) {
+	controller, _ := newTestTelegramControllerWithDNS(t, fakeDNS{})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "ipv6", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "ipv6.example.com", "rec-aaaa", "AAAA", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_add"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "nodes_group:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "ipv6-01"); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleText(ctx, 1, "203.0.113.10"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.GetNodeByName(ctx, "ipv6-01"); err == nil {
+		t.Fatal("expected ipv4 rejected for AAAA group")
+	}
+}
+
 func TestNodeNameAndIPPromptsCleansUpAfterSuccess(t *testing.T) {
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{})
 	ctx := context.Background()

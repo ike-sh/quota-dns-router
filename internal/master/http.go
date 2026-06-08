@@ -111,6 +111,9 @@ func (s HTTPServer) report(w http.ResponseWriter, r *http.Request) {
 				msg := fmt.Sprintf("Agent %s 上报 traffic_mode=%s，节点配置为 %s", req.AgentID, reported, node.TrafficMode)
 				slog.Warn("agent traffic_mode mismatch", "agent_id", req.AgentID, "reported", reported, "expected", node.TrafficMode)
 				_ = s.Store.SaveLastError(r.Context(), errorKeyAgentTrafficMode, msg, req.AgentID)
+				if s.Service != nil {
+					s.Service.HandleTrafficModeMismatch(r.Context(), req.AgentID, node.Name, reported, node.TrafficMode)
+				}
 			} else {
 				_ = s.Store.ClearLastError(r.Context(), errorKeyAgentTrafficMode)
 			}
