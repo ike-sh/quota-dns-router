@@ -36,7 +36,9 @@ jobs:
 
               CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
 
-              "${out_dir}/${bin}" version
+              if [ "${arch}" = "amd64" ]; then
+                "${out_dir}/${bin}" version
+              fi
 
               printf '%s\n' \
                 "${bin} ${GITHUB_REF_NAME} linux/${arch}" \
