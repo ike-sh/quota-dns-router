@@ -261,9 +261,14 @@ func TestSmokeScriptSupportsMasterAndAgent(t *testing.T) {
 	body := readScript(t, "smoke.sh")
 	for _, want := range []string{
 		"用法：smoke.sh master|agent",
+		"Master 版本为 0.2.3",
+		"/healthz 存活探针",
+		"/readyz 就绪探针",
+		"本机 /api/status 可访问",
 		"qdr-master status",
 		"qdr-master config-check",
 		"qdr-master telegram-status",
+		"Agent 版本为 0.2.3",
 		"qdr-agent status",
 		"qdr-agent config-check",
 		"验收通过。",
