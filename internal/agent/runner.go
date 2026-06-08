@@ -79,7 +79,7 @@ func (r *Runner) Once(ctx context.Context) error {
 		TXDelta:      sample.TXDelta,
 		ReportedAt:   now,
 		ReportTime:   now,
-		TrafficMode:  "rx+tx",
+		TrafficMode:  r.Config.TrafficMode,
 		AgentVersion: r.Config.Version,
 		Status:       "online",
 	}
@@ -140,13 +140,18 @@ func RenderAgentEnv(resp api.JoinResponse, stateFile string) string {
 	if stateFile == "" {
 		stateFile = "/var/lib/quota-dns-router/agent-state.json"
 	}
+	trafficMode := resp.TrafficMode
+	if trafficMode == "" {
+		trafficMode = "rx+tx"
+	}
 	return fmt.Sprintf(`QDR_MASTER_API_URL=%s
 QDR_AGENT_ID=%s
 QDR_AGENT_TOKEN=%s
 QDR_AGENT_NODE_NAME=%s
 QDR_AGENT_IFACE=%s
+QDR_AGENT_TRAFFIC_MODE=%s
 QDR_AGENT_INTERVAL=%ds
 QDR_AGENT_PUBLIC_IP_OVERRIDE=%s
 QDR_AGENT_STATE_FILE=%s
-`, resp.MasterAPIURL, resp.AgentID, resp.AgentToken, resp.NodeName, resp.Interface, resp.IntervalSeconds, resp.PublicIPOverride, stateFile)
+`, resp.MasterAPIURL, resp.AgentID, resp.AgentToken, resp.NodeName, resp.Interface, trafficMode, resp.IntervalSeconds, resp.PublicIPOverride, stateFile)
 }

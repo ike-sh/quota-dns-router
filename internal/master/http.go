@@ -21,11 +21,18 @@ type HTTPServer struct {
 
 func (s HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.HandleFunc("/api/agent/join", s.join)
-	mux.HandleFunc("/api/agent/report", s.report)
+	joinLimiter := newJoinRateLimiter(10, time.Minute)
+	health := HealthChecker{Store: s.Store}
+	mux.HandleFunc("/healthz", health.liveness)
+	mux.HandleFunc("/readyz", health.readiness)
+	mux.HandleFunc("/api/agent/join",
+		withAccessLog(withJoinRateLimit(joinLimiter,
+			withMaxBodyBytes(s.join, maxRequestBodyBytes),
+		)),
+	)
+	mux.HandleFunc("/api/agent/report",
+		withAccessLog(withMaxBodyBytes(s.report, maxRequestBodyBytes)),
+	)
 	return mux
 }
 
@@ -58,6 +65,7 @@ func (s HTTPServer) join(w http.ResponseWriter, r *http.Request) {
 		Interface:        res.Interface,
 		IntervalSeconds:  res.ReportIntervalSeconds,
 		PublicIPOverride: res.PublicIPOverride,
+		TrafficMode:      res.TrafficMode,
 	}
 	writeJSON(w, resp)
 }

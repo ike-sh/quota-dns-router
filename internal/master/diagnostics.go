@@ -208,7 +208,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 				if summary.Pending {
 					summary.Pending = false
 					summary.RecordID = rec.ID
-					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, normalizeDNSTTLValue(rec.TTL), rec.Proxied, cfg.AllowOverride)
+					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, rec.Type, normalizeDNSTTLValue(rec.TTL), rec.Proxied, cfg.AllowOverride)
 				}
 				summary.TTL = normalizeDNSTTLValue(rec.TTL)
 				summary.Proxied = rec.Proxied
@@ -322,7 +322,7 @@ func BuildGroupDiagnostics(ctx context.Context, store *db.Store, now time.Time, 
 				if dnsPending {
 					dnsPending = false
 					cfg.RecordID = rec.ID
-					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
+					_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, rec.Name, rec.ID, rec.Type, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
 				}
 				currentIP = rec.Content
 				for _, usage := range usages {

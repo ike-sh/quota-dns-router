@@ -15,6 +15,7 @@ type JoinResponse struct {
 	Interface        string `json:"interface"`
 	IntervalSeconds  int    `json:"interval_seconds"`
 	PublicIPOverride string `json:"public_ip_override"`
+	TrafficMode      string `json:"traffic_mode"`
 }
 
 type AgentReportRequest struct {

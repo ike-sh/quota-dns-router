@@ -90,9 +90,16 @@ func (c *Client) LookupZoneID(ctx context.Context, token, zoneName string) (stri
 }
 
 func (c *Client) LookupDNSRecord(ctx context.Context, token, zoneID, recordName string) (DNSRecord, error) {
+	return c.LookupDNSRecordWithType(ctx, token, zoneID, recordName, "A")
+}
+
+func (c *Client) LookupDNSRecordWithType(ctx context.Context, token, zoneID, recordName, recordType string) (DNSRecord, error) {
+	if recordType == "" {
+		recordType = "A"
+	}
 	v := url.Values{}
 	v.Set("name", recordName)
-	v.Set("type", "A")
+	v.Set("type", recordType)
 	body, err := c.get(ctx, token, "/zones/"+zoneID+"/dns_records?"+v.Encode())
 	if err != nil {
 		return DNSRecord{}, err
@@ -102,7 +109,7 @@ func (c *Client) LookupDNSRecord(ctx context.Context, token, zoneID, recordName 
 		return DNSRecord{}, err
 	}
 	if len(resp.Result) == 0 {
-		return DNSRecord{}, fmt.Errorf("未找到 DNS A 记录: %s", recordName)
+		return DNSRecord{}, fmt.Errorf("未找到 DNS %s 记录: %s", recordType, recordName)
 	}
 	return resp.Result[0], nil
 }
@@ -125,8 +132,15 @@ func (c *Client) LookupDNSRecordAnyType(ctx context.Context, token, zoneID, reco
 }
 
 func (c *Client) CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (DNSRecord, error) {
+	return c.CreateDNSRecordWithType(ctx, token, zoneID, recordName, ip, "A", ttl, proxied)
+}
+
+func (c *Client) CreateDNSRecordWithType(ctx context.Context, token, zoneID, recordName, ip, recordType string, ttl int, proxied bool) (DNSRecord, error) {
+	if recordType == "" {
+		recordType = "A"
+	}
 	payload := DNSRecord{
-		Type:    "A",
+		Type:    recordType,
 		Name:    recordName,
 		Content: ip,
 		TTL:     ttl,
@@ -145,14 +159,21 @@ func (c *Client) CreateDNSRecord(ctx context.Context, token, zoneID, recordName,
 		return DNSRecord{}, err
 	}
 	if !resp.Success {
-		return DNSRecord{}, fmt.Errorf("Cloudflare 创建 DNS A 记录失败")
+		return DNSRecord{}, fmt.Errorf("Cloudflare 创建 DNS %s 记录失败", recordType)
 	}
 	return resp.Result, nil
 }
 
 func (c *Client) UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error {
+	return c.UpdateDNSRecordWithType(ctx, token, zoneID, recordID, recordName, ip, "A", ttl, proxied)
+}
+
+func (c *Client) UpdateDNSRecordWithType(ctx context.Context, token, zoneID, recordID, recordName, ip, recordType string, ttl int, proxied bool) error {
+	if recordType == "" {
+		recordType = "A"
+	}
 	payload := DNSRecord{
-		Type:    "A",
+		Type:    recordType,
 		Name:    recordName,
 		Content: ip,
 		TTL:     ttl,

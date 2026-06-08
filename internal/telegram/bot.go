@@ -18,7 +18,7 @@ type HTTPClient interface {
 
 type Bot struct {
 	token      string
-	adminID    int64
+	adminIDs   []int64
 	httpClient HTTPClient
 	baseURL    string
 }
@@ -98,19 +98,34 @@ type CopyTextButton struct {
 }
 
 func NewBot(token string, adminID int64, client HTTPClient) *Bot {
+	return NewBotForAdmins(token, []int64{adminID}, client)
+}
+
+func NewBotForAdmins(token string, adminIDs []int64, client HTTPClient) *Bot {
 	if client == nil {
 		client = &http.Client{Timeout: 20 * time.Second}
 	}
+	ids := make([]int64, 0, len(adminIDs))
+	for _, id := range adminIDs {
+		if id != 0 {
+			ids = append(ids, id)
+		}
+	}
 	return &Bot{
 		token:      token,
-		adminID:    adminID,
+		adminIDs:   ids,
 		httpClient: client,
 		baseURL:    fmt.Sprintf("https://api.telegram.org/bot%s", token),
 	}
 }
 
 func (b *Bot) IsAdmin(id int64) bool {
-	return id == b.adminID
+	for _, adminID := range b.adminIDs {
+		if id == adminID {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Bot) GetUpdates(ctx context.Context, offset int, timeout time.Duration) ([]Update, error) {
@@ -179,7 +194,16 @@ func (b *Bot) EditMessageText(ctx context.Context, chatID, messageID int64, text
 }
 
 func (b *Bot) SendAdminMessage(ctx context.Context, text string) error {
-	return b.SendMessage(ctx, b.adminID, text, nil)
+	if len(b.adminIDs) == 0 {
+		return fmt.Errorf("未配置 Telegram 管理员")
+	}
+	var firstErr error
+	for _, adminID := range b.adminIDs {
+		if err := b.SendMessage(ctx, adminID, text, nil); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (b *Bot) AnswerCallback(ctx context.Context, callbackID, text string) error {

@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
@@ -44,7 +45,7 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 	} else if suggested := SuggestedPublicAPIURLFromIP(cfg.DetectedPublicIP); suggested != "" {
 		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, suggested)
 	}
-	bot := telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminID, nil)
+	bot := telegram.NewBotForAdmins(cfg.TelegramToken, cfg.TelegramAdminIDs, nil)
 	return &Runtime{
 		Config: cfg,
 		Store:  store,
@@ -89,6 +90,7 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 	go func() {
 		ticker := time.NewTicker(cfg.CheckInterval)
 		defer ticker.Stop()
+		var lastReportPurge time.Time
 		for {
 			select {
 			case <-ctx.Done():
@@ -96,10 +98,19 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 				return
 			case <-ticker.C:
 				if err := svc.CheckOfflineNodes(ctx); err != nil {
-					fmt.Fprintf(os.Stderr, "离线检查失败：%v\n", err)
+					slog.Error("offline check failed", "error", err)
 				}
 				if err := svc.EvaluateAndSwitchAll(ctx); err != nil {
-					fmt.Fprintf(os.Stderr, "自动检查失败：%v\n", err)
+					slog.Error("auto switch evaluation failed", "error", err)
+				}
+				if lastReportPurge.IsZero() || time.Since(lastReportPurge) >= 24*time.Hour {
+					cutoff := time.Now().AddDate(0, 0, -cfg.AgentReportRetentionDays)
+					if count, err := runtime.Store.PurgeAgentReportsBefore(ctx, cutoff); err != nil {
+						slog.Error("agent report purge failed", "error", err)
+					} else if count > 0 {
+						slog.Info("purged old agent reports", "count", count, "retention_days", cfg.AgentReportRetentionDays)
+					}
+					lastReportPurge = time.Now()
 				}
 			}
 		}

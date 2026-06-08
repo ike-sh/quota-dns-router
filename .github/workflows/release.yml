@@ -25,34 +25,38 @@ jobs:
           set -euo pipefail
           mkdir -p dist
 
-          for bin in qdr-master qdr-agent; do
-            out_dir="$(mktemp -d)"
-            if [ "$bin" = "qdr-master" ]; then
-              pkg="./cmd/qdr-master"
-            else
-              pkg="./cmd/qdr-agent"
-            fi
+          for arch in amd64 arm64; do
+            for bin in qdr-master qdr-agent; do
+              out_dir="$(mktemp -d)"
+              if [ "$bin" = "qdr-master" ]; then
+                pkg="./cmd/qdr-master"
+              else
+                pkg="./cmd/qdr-agent"
+              fi
 
-            CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
+              CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build -trimpath -ldflags="-s -w" -o "${out_dir}/${bin}" "${pkg}"
 
-            "${out_dir}/${bin}" version
+              "${out_dir}/${bin}" version
 
-            printf '%s\n' \
-              "${bin} ${GITHUB_REF_NAME}" \
-              "" \
-              "Extract the archive and install the binary to /usr/local/bin." \
-              > "${out_dir}/README.txt"
+              printf '%s\n' \
+                "${bin} ${GITHUB_REF_NAME} linux/${arch}" \
+                "" \
+                "Extract the archive and install the binary to /usr/local/bin." \
+                > "${out_dir}/README.txt"
 
-            tar -C "${out_dir}" -czf "dist/${bin}_linux_amd64.tar.gz" "${bin}" README.txt
-            rm -rf "${out_dir}"
+              tar -C "${out_dir}" -czf "dist/${bin}_linux_${arch}.tar.gz" "${bin}" README.txt
+              rm -rf "${out_dir}"
+            done
           done
 
           cd dist
-          sha256sum qdr-master_linux_amd64.tar.gz qdr-agent_linux_amd64.tar.gz > SHA256SUMS
+          sha256sum *.tar.gz > SHA256SUMS
 
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/qdr-master_linux_amd64.tar.gz
             dist/qdr-agent_linux_amd64.tar.gz
+            dist/qdr-master_linux_arm64.tar.gz
+            dist/qdr-agent_linux_arm64.tar.gz
             dist/SHA256SUMS

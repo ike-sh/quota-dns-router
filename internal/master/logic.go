@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -25,7 +26,20 @@ type DNSProvider interface {
 	LookupDNSRecord(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error)
 	LookupDNSRecordAnyType(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error)
 	CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (cloudflare.DNSRecord, error)
+	CreateDNSRecordWithType(ctx context.Context, token, zoneID, recordName, ip, recordType string, ttl int, proxied bool) (cloudflare.DNSRecord, error)
 	UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error
+	UpdateDNSRecordWithType(ctx context.Context, token, zoneID, recordID, recordName, ip, recordType string, ttl int, proxied bool) error
+	LookupDNSRecordWithType(ctx context.Context, token, zoneID, recordName, recordType string) (cloudflare.DNSRecord, error)
+}
+
+func dnsRecordType(cfg db.CloudflareConfig, discovered string) string {
+	if discovered != "" {
+		return discovered
+	}
+	if cfg.RecordType != "" {
+		return cfg.RecordType
+	}
+	return "A"
 }
 
 type Service struct {
@@ -51,6 +65,16 @@ const (
 	switchReasonDisabled  = "当前节点已禁用"
 	switchReasonNoAuto    = "当前节点不参与自动切换"
 )
+
+type CurrentNodeUnresolvedError struct {
+	GroupID    string
+	RecordName string
+	DNSIP      string
+}
+
+func (e *CurrentNodeUnresolvedError) Error() string {
+	return fmt.Sprintf("DNS 记录 %s 当前指向 %s，未匹配任何节点", e.RecordName, e.DNSIP)
+}
 
 func NewService(store *db.Store, notifier TelegramNotifier, dns DNSProvider) *Service {
 	return &Service{
@@ -102,6 +126,13 @@ func (s *Service) HandleGroup(ctx context.Context, groupID string) error {
 	if policy.NotifyOnly {
 		return nil
 	}
+	if policy.MaintenanceMode {
+		slog.Info("auto switch skipped: maintenance mode enabled",
+			"group", decision.Group.Name,
+			"reason", decision.Reason,
+		)
+		return nil
+	}
 	return s.ExecuteSwitch(ctx, decision)
 }
 
@@ -123,6 +154,17 @@ func (s *Service) BuildDecision(ctx context.Context, groupID string) (SwitchDeci
 	}
 	current, err := s.ResolveCurrentNode(ctx, group, cfg, nodes)
 	if err != nil {
+		var unresolved *CurrentNodeUnresolvedError
+		if errors.As(err, &unresolved) {
+			msg := fmt.Sprintf(
+				"⚠️ 分组 %s：DNS 记录 %s 当前指向 %s，但未匹配任何已配置节点。自动切换已暂停，请在 Telegram 中检查 DNS 或节点 IP。",
+				group.Name,
+				unresolved.RecordName,
+				unresolved.DNSIP,
+			)
+			_, _ = s.notifyOnce(ctx, "dns_unmatched", unresolved.GroupID+":"+unresolved.DNSIP, msg, "")
+			return SwitchDecision{Group: group, Config: cfg}, nil
+		}
 		return SwitchDecision{}, err
 	}
 	policy, err := s.Store.GetPolicy(ctx)
@@ -170,12 +212,12 @@ func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db
 		}
 		zoneID = id
 	}
-	record, err := s.DNS.LookupDNSRecord(ctx, cfg.APIToken, zoneID, cfg.RecordName)
+	record, err := s.DNS.LookupDNSRecordWithType(ctx, cfg.APIToken, zoneID, cfg.RecordName, dnsRecordType(cfg, ""))
 	if err != nil {
 		return db.NodeUsage{}, err
 	}
 	if recordID == "" || zoneID != cfg.ZoneID {
-		_, _ = s.Store.CreateOrUpdateCloudflareConfig(ctx, cfg.GroupID, cfg.RecordName, record.ID, cfg.TTL, cfg.Proxied, cfg.AllowOverride)
+		_, _ = s.Store.CreateOrUpdateCloudflareConfig(ctx, cfg.GroupID, cfg.RecordName, record.ID, dnsRecordType(cfg, record.Type), cfg.TTL, cfg.Proxied, cfg.AllowOverride)
 	}
 	for _, node := range nodes {
 		if strings.TrimSpace(node.PublicIP) == strings.TrimSpace(record.Content) {
@@ -183,7 +225,11 @@ func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db
 			return node, nil
 		}
 	}
-	return nodes[0], nil
+	return db.NodeUsage{}, &CurrentNodeUnresolvedError{
+		GroupID:    group.ID,
+		RecordName: cfg.RecordName,
+		DNSIP:      strings.TrimSpace(record.Content),
+	}
 }
 
 func reasonForSwitch(current db.NodeUsage, policy db.Policy, now time.Time) string {
@@ -247,14 +293,22 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 	}
 	recordID := cfg.RecordID
 	if recordID == "" {
-		record, err := s.DNS.LookupDNSRecord(ctx, cfg.APIToken, zoneID, cfg.RecordName)
+		record, err := s.DNS.LookupDNSRecordWithType(ctx, cfg.APIToken, zoneID, cfg.RecordName, dnsRecordType(cfg, ""))
 		if err != nil {
 			return err
 		}
 		recordID = record.ID
 	}
-	err := s.DNS.UpdateDNSRecord(ctx, cfg.APIToken, zoneID, recordID, cfg.RecordName, decision.Target.PublicIP, cfg.TTL, cfg.Proxied)
+	err := s.DNS.UpdateDNSRecordWithType(ctx, cfg.APIToken, zoneID, recordID, cfg.RecordName, decision.Target.PublicIP, dnsRecordType(cfg, ""), cfg.TTL, cfg.Proxied)
 	if err != nil {
+		slog.Error("dns switch failed",
+			"group", decision.Group.Name,
+			"record", cfg.RecordName,
+			"from", decision.Current.Name,
+			"to", decision.Target.Name,
+			"trigger", decision.TriggerType,
+			"error", err,
+		)
 		_ = s.Store.SetStatusNote(ctx, noteKeyDNSUpdate(decision.Group.ID), "❌ DNS 修改失败")
 		_ = s.Store.SaveLastError(ctx, errorKeyDNSUpdate(decision.Group.ID), err.Error(), cfg.APIToken)
 		_ = s.Store.RecordSwitchHistory(ctx, decision.Group.ID, decision.Current.ID, decision.Target.ID, cfg.RecordName, decision.Current.PublicIP, decision.Target.PublicIP, decision.TriggerType, decision.Reason, "failed", err.Error(), cfg.APIToken)
@@ -272,6 +326,15 @@ func (s *Service) ExecuteSwitch(ctx context.Context, decision SwitchDecision) er
 	}
 	msg := switchOKMessage(decision)
 	_ = s.notify(ctx, "switch_ok", decision.Group.ID, msg, "")
+	slog.Info("dns switch succeeded",
+		"group", decision.Group.Name,
+		"record", cfg.RecordName,
+		"from", decision.Current.Name,
+		"to", decision.Target.Name,
+		"old_ip", decision.Current.PublicIP,
+		"new_ip", decision.Target.PublicIP,
+		"trigger", decision.TriggerType,
+	)
 	return nil
 }
 

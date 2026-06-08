@@ -46,11 +46,21 @@ func (f fakeDNS) LookupDNSRecord(ctx context.Context, token, zoneID, recordName 
 	return f.record, f.recordErr
 }
 
+func (f fakeDNS) LookupDNSRecordWithType(ctx context.Context, token, zoneID, recordName, recordType string) (cloudflare.DNSRecord, error) {
+	_ = recordType
+	return f.record, f.recordErr
+}
+
 func (f fakeDNS) LookupDNSRecordAnyType(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error) {
 	return f.anyRecord, f.anyRecordErr
 }
 
 func (f fakeDNS) CreateDNSRecord(ctx context.Context, token, zoneID, recordName, ip string, ttl int, proxied bool) (cloudflare.DNSRecord, error) {
+	return f.CreateDNSRecordWithType(ctx, token, zoneID, recordName, ip, "A", ttl, proxied)
+}
+
+func (f fakeDNS) CreateDNSRecordWithType(ctx context.Context, token, zoneID, recordName, ip, recordType string, ttl int, proxied bool) (cloudflare.DNSRecord, error) {
+	_ = recordType
 	if f.createRecord.ID != "" || f.createErr != nil {
 		return f.createRecord, f.createErr
 	}
@@ -58,6 +68,11 @@ func (f fakeDNS) CreateDNSRecord(ctx context.Context, token, zoneID, recordName,
 }
 
 func (f fakeDNS) UpdateDNSRecord(ctx context.Context, token, zoneID, recordID, recordName, ip string, ttl int, proxied bool) error {
+	return f.UpdateDNSRecordWithType(ctx, token, zoneID, recordID, recordName, ip, "A", ttl, proxied)
+}
+
+func (f fakeDNS) UpdateDNSRecordWithType(ctx context.Context, token, zoneID, recordID, recordName, ip, recordType string, ttl int, proxied bool) error {
+	_ = recordType
 	if f.updateCalls != nil {
 		*f.updateCalls = append(*f.updateCalls, dnsUpdateCall{
 			Token:      token,
@@ -110,7 +125,7 @@ func TestDNSSummaryOutput(t *testing.T) {
 		ReportIntervalSeconds: 60,
 	})
 	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
-	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", 60, false, true)
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", "A", 60, false, true)
 	items, err := BuildDNSSummaries(ctx, store, fakeDNS{
 		record: cloudflare.DNSRecord{ID: "r1", Type: "A", Name: "hk.example.com", Content: "203.0.113.10", TTL: 60},
 	})
@@ -203,7 +218,7 @@ func TestGroupDiagnosticsAvailableTargets(t *testing.T) {
 	})
 	_ = store.UpdateGroupCurrentNode(ctx, group.ID, node1.ID)
 	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
-	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "r1", 60, false, true)
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "r1", "A", 60, false, true)
 	_ = store.BindAgentToNode(ctx, node2.ID, "agent-2")
 	_ = store.SaveAgentReport(ctx, db.AgentReport{
 		AgentID:      "agent-2",

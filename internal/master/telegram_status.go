@@ -41,7 +41,7 @@ func BuildTelegramStatus(ctx context.Context, cfg config.MasterConfig) (Telegram
 		return status, nil
 	}
 
-	bot := telegram.NewBot(cfg.TelegramToken, cfg.TelegramAdminID, nil)
+	bot := telegram.NewBotForAdmins(cfg.TelegramToken, cfg.TelegramAdminIDs, nil)
 	me, err := bot.GetMe(ctx)
 	if err != nil {
 		status.GetMe = "❌ " + sanitizeStatusMessage(err.Error())

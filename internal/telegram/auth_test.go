@@ -16,6 +16,16 @@ func TestIsAdmin(t *testing.T) {
 	}
 }
 
+func TestIsAdminSupportsMultipleIDs(t *testing.T) {
+	bot := NewBotForAdmins("token", []int64{123, 456}, nil)
+	if !bot.IsAdmin(456) {
+		t.Fatal("expected second admin to pass")
+	}
+	if bot.IsAdmin(789) {
+		t.Fatal("unexpected admin")
+	}
+}
+
 func TestInlineKeyboardButtonSupportsCopyText(t *testing.T) {
 	markup := ReplyMarkup{InlineKeyboard: [][]InlineKeyboardButton{{
 		{Text: "复制安装命令", CopyText: &CopyTextButton{Text: "bash install.sh"}},

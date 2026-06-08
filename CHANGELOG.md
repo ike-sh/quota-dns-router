@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 0.2.0
+
+- HTTP API 安全加固：请求体大小限制、join 限流、访问日志。
+- Telegram 模块按业务域拆分，提升可维护性。
+- 修复 DNS 当前节点解析：IP 不匹配任何节点时不再错误回退。
+- Agent 上报使用节点配置的 `traffic_mode`，Join 响应写入 env。
+- 健康检查：`/healthz` 存活探针、`/readyz` SQLite 就绪探针。
+- 结构化日志覆盖 DNS 切换、离线检查、上报清理等关键路径。
+- `agent_reports` 自动清理，默认保留 30 天（`QDR_AGENT_REPORT_RETENTION_DAYS`）。
+- `qdr-master backup` / `restore` 数据库备份恢复 CLI。
+- Release 与安装脚本支持 `linux/arm64`。
+- 维护窗口：Telegram 可暂停自动切换，手动切换仍可用。
+- 多 Telegram 管理员：`QDR_TELEGRAM_ADMIN_IDS` 逗号分隔。
+- DNS 记录类型基础支持：配置可保存 A / AAAA，切换按记录类型更新 Cloudflare。
+
 ## 0.1.0
 
 - 首个正式版本，稳定提供 Master + Agent、Telegram Bot 配置、Cloudflare DNS A 记录切换和 SQLite 本地存储。
@@ -38,80 +53,3 @@
 - Telegram 的 pending prompt 统一改为可追踪的编辑/删除流程，Cloudflare Token、Zone Name、DNS TTL、DNS A 记录、分组、节点名、节点 IP 和策略输入在成功或 `/cancel` 后都会清理提示消息。
 - Agent 安装命令改为按节点缓存 join code，纯命令复制不会每次点击都生成新码，只有点“重新生成命令”才会刷新。
 - DNS help 与向导文案继续对齐到 `<A记录>` 和 `example.com` 占位值，避免帮助文本和真实参数不一致。
-- 版本升级到 `0.1.0-alpha.10`，同步更新安装脚本、README 和验证。
-
-## 0.1.0-alpha.9
-
-- Telegram 状态页在按钮入口下改为带导航的状态面板，支持“刷新状态 / DNS 配置 / 节点管理 / 返回主菜单”，并继续优先使用 `editMessageText` 更新当前消息。
-- 分组管理新增分组详情与改名流程，`/groups rename <old> <new>` 继续保留兼容命令；分组详情可直接跳转到该组 DNS 或节点列表。
-- DNS 管理新增详情页，支持修改域名、TTL、proxied，以及把记录改为指向某个节点；TTL 默认值改为 `60`，并支持 `1/auto` 自动 TTL。
-- Agent 命令页改为“说明预览 + 纯安装命令 / 纯卸载命令”双层交互，便于在 Telegram 客户端里直接长按复制。
-- 仓库内示例域名和示例 IP 全部统一为 `example.com` / `hk.example.com` 等占位值与 RFC 保留网段，并新增扫描用例防止旧示例残留。
-- 统计模式、TTL 等选择页补齐回退入口，减少流程中断后只能依赖 `/cancel` 退出的情况。
-- 版本升级到 `0.1.0-alpha.9`，同步更新 Master / Agent CLI、安装脚本、README、CHANGELOG 和验证。
-
-## 0.1.0-alpha.7
-
-- 修复 `.github/workflows/release.yml` 中 `Build release archives` 步骤的 shell 语法错误，移除 YAML `run` 块里的 heredoc，改用 `printf` 生成 `README.txt`。
-- Release 工作流暂时收敛为仅构建 `linux/amd64`，发布 `qdr-master_linux_amd64.tar.gz`、`qdr-agent_linux_amd64.tar.gz` 和 `SHA256SUMS`。
-- 安装脚本默认二进制下载 tag 升级到 `v0.1.0-alpha.7`，并固定下载 `linux_amd64` release 包。
-- 版本升级到 `0.1.0-alpha.7`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
-
-## 0.1.0-alpha.6
-
-- 安装器默认切换到 `QDR_INSTALL_MODE=binary`，优先从 GitHub Releases 下载预编译 `qdr-master` / `qdr-agent`，安装后强制做版本校验。
-- 新增 `.github/workflows/release.yml`，在 tag 推送时构建 Linux amd64 / arm64 release 包，并发布 `SHA256SUMS`。
-- 安装脚本新增 `binary / source / auto` 三种模式、`QDR_ALLOW_SOURCE_FALLBACK` 控制、二进制安装最小依赖和更明确的安装模式输出。
-- 安装脚本按模式区分磁盘要求：二进制模式优先面向小磁盘 VPS，源码模式继续保留系统 Go / 包管理器 / 官方 tarball 的稳健 fallback。
-- Telegram 节点创建流程默认简化为“分组 -> 节点名 -> 公网 IP -> 确认创建”，默认策略统一集中到 `/policy`，并补充节点详情页、节点策略修改、节点启停、自动切换开关和安装排查入口。
-- DNS 向导在“记录存在但 IP 未匹配任何节点”时，新增一键改为指向已配置节点的修正分支。
-- 版本升级到 `0.1.0-alpha.6`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
-
-## 0.1.0-alpha.5
-
-- 调整 Telegram 推荐初始化顺序为 Master 公网地址 -> Cloudflare -> 分组 -> 节点 -> DNS -> Agent -> 状态，并把节点创建后的主推荐按钮改为 DNS 优先。
-- Agent 安装命令页面增加节点、分组、Master URL、join code 到期时间，以及“无 DNS 记录”或“DNS IP 未匹配节点”的显式 warning。
-- `/dns` 成功保存或创建后，直接提示匹配节点和下一步 Agent 安装；`/status` 与 `/nodes` 区分“未安装/未上线”和“离线”。
-- `install-agent.sh` 新增 `--yes` 兼容参数、磁盘空间检查、系统 Go 优先复用、apt 优先安装、官方 Go tarball 临时目录解压与最后 50 行错误输出。
-- `install-agent.sh` 构建后强制执行 `qdr-agent version` 校验；`install-master.sh` 同步增加磁盘空间检查和安全 Go fallback。
-- 版本升级到 `0.1.0-alpha.5`，同步更新 Master / Agent CLI、安装脚本、README 和验证。
-
-## 0.1.0-alpha.4
-
-- Telegram 初始化流程改为“按钮 + 向导”优先，覆盖 Cloudflare、DNS、分组、节点、策略和 Agent 安装。
-- `/cf` 新增 Token 输入、Zone 选择、手动输入 Zone Name、自动查询 Zone 列表和下一步按钮。
-- `/dns` 新增分组选择、记录名逐步输入、记录不存在时的节点选择创建流程。
-- `/groups`、`/nodes`、`/policy`、`/agent` 新增面板和向导式交互，保留命令行直传兼容。
-- 抽象统一 pending 状态处理，错误输入不清状态，`/cancel` 可取消，切换向导会提示已切换。
-- Cloudflare Token 回复和诊断保持脱敏，尝试删除 Token 输入消息但不因删除失败中断流程。
-- Agent 安装命令改为显式 `--master` 参数，join code 有效期缩短为 30 分钟。
-- 版本升级到 `0.1.0-alpha.4`，同步更新 Master / Agent CLI 与安装脚本版本输出。
-
-## 0.1.0-alpha.3
-
-- 修复 Telegram `/config_master_url` 等待输入状态在错误输入后丢失的问题。
-- `/config_master_url <url>` 支持命令参数直传，错误后保持 pending 状态并允许重试。
-- Master 公网地址支持公网 IP 自动补全为 `http://IP:8080`，并默认拒绝本机地址。
-- Master 安装脚本尝试检测公网 IPv4，并写入 `QDR_SUGGESTED_PUBLIC_API_URL`。
-- Telegram 配置 Master 公网地址时支持“一键使用当前公网地址”按钮。
-
-## 0.1.0-alpha.2
-
-- 修复 Master / Agent systemd 运行用户读取 env 文件和写入数据目录的权限问题。
-- `qdr-master run` / `qdr-agent run` 默认从当前环境读取配置，避免 systemd 已注入 EnvironmentFile 后再次强制打开默认 env 文件。
-- 增加 `qdr-master telegram-status` 轻量诊断命令。
-- 安装脚本增加旧服务 stop/reset-failed、启动自检和 status/journal 排查提示。
-- 卸载脚本增加 reset-failed，purge 路径保持幂等。
-
-## 0.1.0-alpha.1
-
-- 初始版本：Master / Agent CLI。
-- SQLite migration 与核心数据表。
-- Telegram Bot long polling 配置入口。
-- Agent join code、Bearer Token 鉴权与流量上报。
-- `/proc/net/dev` RX/TX 统计与计数器重置处理。
-- Cloudflare DNS A 记录查询与更新客户端。
-- 自动切换逻辑、阈值判断、节点选择和 cooldown。
-- systemd 安装和卸载脚本。
-- 中文 README 与基础验证。
-- GitHub raw 一行安装脚本：Master / Agent 可自动下载源码并构建。

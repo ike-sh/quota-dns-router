@@ -46,6 +46,7 @@ type Policy struct {
 	OfflineNotifySeconds       int
 	AutoSwitchEnabled          bool
 	NotifyOnly                 bool
+	MaintenanceMode            bool
 	DefaultSwitchCooldownSecs  int
 	RepoInstallURL             string
 }
@@ -68,6 +69,7 @@ type CloudflareConfig struct {
 	ZoneID        string
 	RecordName    string
 	RecordID      string
+	RecordType    string
 	AllowOverride bool
 	TTL           int
 	Proxied       bool
@@ -136,6 +138,7 @@ type JoinCodeResult struct {
 	PublicIPOverride      string
 	Interface             string
 	ReportIntervalSeconds int
+	TrafficMode           string
 }
 
 type StatusSummary struct {
@@ -207,6 +210,18 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}
+
+func (s *Store) PurgeAgentReportsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM agent_reports WHERE reported_at < ?`, cutoff.UTC())
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (s *Store) DB() *sql.DB {
@@ -368,6 +383,7 @@ func DefaultPolicy() Policy {
 		OfflineNotifySeconds:       600,
 		AutoSwitchEnabled:          true,
 		NotifyOnly:                 false,
+		MaintenanceMode:            false,
 		DefaultSwitchCooldownSecs:  600,
 		RepoInstallURL:             "https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-agent.sh",
 	}
@@ -384,6 +400,7 @@ func (s *Store) SavePolicy(ctx context.Context, p Policy) error {
 		"offline_notify_seconds":        strconv.Itoa(p.OfflineNotifySeconds),
 		"auto_switch_enabled":           boolString(p.AutoSwitchEnabled),
 		"notify_only":                   boolString(p.NotifyOnly),
+		"maintenance_mode":              boolString(p.MaintenanceMode),
 		"default_switch_cooldown_secs":  strconv.Itoa(p.DefaultSwitchCooldownSecs),
 		"repo_install_url":              p.RepoInstallURL,
 	}
@@ -435,6 +452,9 @@ func (s *Store) GetPolicy(ctx context.Context) (Policy, error) {
 	}
 	if v, err := s.GetSetting(ctx, "notify_only"); err == nil && v != "" {
 		p.NotifyOnly = v == "true"
+	}
+	if v, err := s.GetSetting(ctx, "maintenance_mode"); err == nil && v != "" {
+		p.MaintenanceMode = v == "true"
 	}
 	if v, err := s.GetSetting(ctx, "default_switch_cooldown_secs"); err == nil && v != "" {
 		if n, convErr := strconv.Atoi(v); convErr == nil {
@@ -627,7 +647,7 @@ func (s *Store) CountCloudflareConfigs(ctx context.Context) (int, error) {
 
 func (s *Store) ListCloudflareConfigs(ctx context.Context) ([]CloudflareConfig, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, group_id, api_token, zone_name, zone_id, record_name, record_id, allow_override, ttl, proxied, created_at, updated_at
+		SELECT id, group_id, api_token, zone_name, zone_id, record_name, record_id, record_type, allow_override, ttl, proxied, created_at, updated_at
 		FROM cloudflare_configs ORDER BY record_name
 	`)
 	if err != nil {
@@ -637,7 +657,7 @@ func (s *Store) ListCloudflareConfigs(ctx context.Context) ([]CloudflareConfig, 
 	var out []CloudflareConfig
 	for rows.Next() {
 		var cfg CloudflareConfig
-		if err := rows.Scan(&cfg.ID, &cfg.GroupID, &cfg.APIToken, &cfg.ZoneName, &cfg.ZoneID, &cfg.RecordName, &cfg.RecordID, &cfg.AllowOverride, &cfg.TTL, &cfg.Proxied, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
+		if err := rows.Scan(&cfg.ID, &cfg.GroupID, &cfg.APIToken, &cfg.ZoneName, &cfg.ZoneID, &cfg.RecordName, &cfg.RecordID, &cfg.RecordType, &cfg.AllowOverride, &cfg.TTL, &cfg.Proxied, &cfg.CreatedAt, &cfg.UpdatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, cfg)
@@ -645,7 +665,10 @@ func (s *Store) ListCloudflareConfigs(ctx context.Context) ([]CloudflareConfig, 
 	return out, rows.Err()
 }
 
-func (s *Store) CreateOrUpdateCloudflareConfig(ctx context.Context, groupID, recordName, recordID string, ttl int, proxied, allowOverride bool) (CloudflareConfig, error) {
+func (s *Store) CreateOrUpdateCloudflareConfig(ctx context.Context, groupID, recordName, recordID, recordType string, ttl int, proxied, allowOverride bool) (CloudflareConfig, error) {
+	if recordType == "" {
+		recordType = "A"
+	}
 	token, zoneName, zoneID, err := s.GetCloudflareDefaults(ctx)
 	if err != nil {
 		return CloudflareConfig{}, err
@@ -655,19 +678,20 @@ func (s *Store) CreateOrUpdateCloudflareConfig(ctx context.Context, groupID, rec
 	}
 	id := NewID("cf")
 	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO cloudflare_configs(id, group_id, api_token, zone_name, zone_id, record_name, record_id, allow_override, ttl, proxied)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO cloudflare_configs(id, group_id, api_token, zone_name, zone_id, record_name, record_id, record_type, allow_override, ttl, proxied)
+		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(group_id) DO UPDATE SET
 			api_token = excluded.api_token,
 			zone_name = excluded.zone_name,
 			zone_id = excluded.zone_id,
 			record_name = excluded.record_name,
 			record_id = excluded.record_id,
+			record_type = excluded.record_type,
 			allow_override = excluded.allow_override,
 			ttl = excluded.ttl,
 			proxied = excluded.proxied,
 			updated_at = CURRENT_TIMESTAMP
-	`, id, groupID, token, zoneName, zoneID, recordName, recordID, boolInt(allowOverride), ttl, boolInt(proxied))
+	`, id, groupID, token, zoneName, zoneID, recordName, recordID, recordType, boolInt(allowOverride), ttl, boolInt(proxied))
 	if err != nil {
 		return CloudflareConfig{}, err
 	}
@@ -677,10 +701,10 @@ func (s *Store) CreateOrUpdateCloudflareConfig(ctx context.Context, groupID, rec
 func (s *Store) GetCloudflareConfigByGroupID(ctx context.Context, groupID string) (CloudflareConfig, error) {
 	var cfg CloudflareConfig
 	err := s.db.QueryRowContext(ctx, `
-		SELECT id, group_id, api_token, zone_name, zone_id, record_name, record_id, allow_override, ttl, proxied, created_at, updated_at
+		SELECT id, group_id, api_token, zone_name, zone_id, record_name, record_id, record_type, allow_override, ttl, proxied, created_at, updated_at
 		FROM cloudflare_configs WHERE group_id = ?
 	`, groupID).Scan(
-		&cfg.ID, &cfg.GroupID, &cfg.APIToken, &cfg.ZoneName, &cfg.ZoneID, &cfg.RecordName, &cfg.RecordID,
+		&cfg.ID, &cfg.GroupID, &cfg.APIToken, &cfg.ZoneName, &cfg.ZoneID, &cfg.RecordName, &cfg.RecordID, &cfg.RecordType,
 		&cfg.AllowOverride, &cfg.TTL, &cfg.Proxied, &cfg.CreatedAt, &cfg.UpdatedAt,
 	)
 	return cfg, err
@@ -941,6 +965,7 @@ func (s *Store) RedeemJoinCode(ctx context.Context, code string) (JoinCodeResult
 		PublicIPOverride:      node.PublicIP,
 		Interface:             node.PreferredIface,
 		ReportIntervalSeconds: node.ReportIntervalSeconds,
+		TrafficMode:           node.TrafficMode,
 	}, nil
 }
 

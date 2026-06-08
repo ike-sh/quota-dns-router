@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,12 +18,14 @@ type MasterConfig struct {
 	LogDir                string
 	TelegramToken         string
 	TelegramAdminID       int64
+	TelegramAdminIDs      []int64
 	TelegramPollTimeout   time.Duration
 	CheckInterval         time.Duration
 	AgentOfflineAfter     time.Duration
 	OfflineNotifyAfter    time.Duration
-	DetectedPublicIP      string
-	SuggestedPublicAPIURL string
+	DetectedPublicIP         string
+	SuggestedPublicAPIURL    string
+	AgentReportRetentionDays int
 }
 
 func LoadMaster(path string) (MasterConfig, error) {
@@ -32,14 +35,11 @@ func LoadMaster(path string) (MasterConfig, error) {
 	}
 	values := MergeEnv(fileValues)
 
-	adminIDRaw := getString(values, "QDR_TELEGRAM_ADMIN_ID", "")
-	if adminIDRaw == "" {
-		return MasterConfig{}, fmt.Errorf("缺少 QDR_TELEGRAM_ADMIN_ID")
-	}
-	adminID, err := strconv.ParseInt(adminIDRaw, 10, 64)
+	adminIDs, err := parseTelegramAdminIDs(values)
 	if err != nil {
-		return MasterConfig{}, fmt.Errorf("QDR_TELEGRAM_ADMIN_ID 不是有效数字")
+		return MasterConfig{}, err
 	}
+	adminID := adminIDs[0]
 	pollTimeout, err := getDuration(values, "QDR_TELEGRAM_POLL_TIMEOUT", 20*time.Second)
 	if err != nil {
 		return MasterConfig{}, err
@@ -57,21 +57,31 @@ func LoadMaster(path string) (MasterConfig, error) {
 		return MasterConfig{}, err
 	}
 
+	retentionDays, err := getInt(values, "QDR_AGENT_REPORT_RETENTION_DAYS", 30)
+	if err != nil {
+		return MasterConfig{}, err
+	}
+	if retentionDays < 1 {
+		return MasterConfig{}, fmt.Errorf("QDR_AGENT_REPORT_RETENTION_DAYS 必须 >= 1")
+	}
+
 	cfg := MasterConfig{
-		EnvPath:               path,
-		ListenAddr:            getString(values, "QDR_MASTER_LISTEN_ADDR", ":8080"),
-		PublicAPIURL:          getString(values, "QDR_MASTER_PUBLIC_API_URL", "http://127.0.0.1:8080"),
-		DBPath:                getString(values, "QDR_MASTER_DB_PATH", "/var/lib/quota-dns-router/master.db"),
-		DataDir:               getString(values, "QDR_MASTER_DATA_DIR", "/var/lib/quota-dns-router"),
-		LogDir:                getString(values, "QDR_MASTER_LOG_DIR", "/var/log/quota-dns-router"),
-		TelegramToken:         getString(values, "QDR_TELEGRAM_TOKEN", ""),
-		TelegramAdminID:       adminID,
-		TelegramPollTimeout:   pollTimeout,
-		CheckInterval:         checkInterval,
-		AgentOfflineAfter:     offlineAfter,
-		OfflineNotifyAfter:    offlineNotifyAfter,
-		DetectedPublicIP:      getString(values, "QDR_DETECTED_PUBLIC_IP", ""),
-		SuggestedPublicAPIURL: getString(values, "QDR_SUGGESTED_PUBLIC_API_URL", ""),
+		EnvPath:                  path,
+		ListenAddr:               getString(values, "QDR_MASTER_LISTEN_ADDR", ":8080"),
+		PublicAPIURL:               getString(values, "QDR_MASTER_PUBLIC_API_URL", "http://127.0.0.1:8080"),
+		DBPath:                     getString(values, "QDR_MASTER_DB_PATH", "/var/lib/quota-dns-router/master.db"),
+		DataDir:                    getString(values, "QDR_MASTER_DATA_DIR", "/var/lib/quota-dns-router"),
+		LogDir:                     getString(values, "QDR_MASTER_LOG_DIR", "/var/log/quota-dns-router"),
+		TelegramToken:              getString(values, "QDR_TELEGRAM_TOKEN", ""),
+		TelegramAdminID:            adminID,
+		TelegramAdminIDs:           adminIDs,
+		TelegramPollTimeout:        pollTimeout,
+		CheckInterval:              checkInterval,
+		AgentOfflineAfter:          offlineAfter,
+		OfflineNotifyAfter:         offlineNotifyAfter,
+		DetectedPublicIP:           getString(values, "QDR_DETECTED_PUBLIC_IP", ""),
+		SuggestedPublicAPIURL:      getString(values, "QDR_SUGGESTED_PUBLIC_API_URL", ""),
+		AgentReportRetentionDays:   retentionDays,
 	}
 	if cfg.TelegramToken == "" {
 		return MasterConfig{}, fmt.Errorf("缺少 QDR_TELEGRAM_TOKEN")
@@ -79,15 +89,46 @@ func LoadMaster(path string) (MasterConfig, error) {
 	return cfg, nil
 }
 
+func parseTelegramAdminIDs(values map[string]string) ([]int64, error) {
+	if multi := strings.TrimSpace(getString(values, "QDR_TELEGRAM_ADMIN_IDS", "")); multi != "" {
+		parts := strings.Split(multi, ",")
+		ids := make([]int64, 0, len(parts))
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			id, err := strconv.ParseInt(part, 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("QDR_TELEGRAM_ADMIN_IDS 包含无效数字：%s", part)
+			}
+			ids = append(ids, id)
+		}
+		if len(ids) == 0 {
+			return nil, fmt.Errorf("QDR_TELEGRAM_ADMIN_IDS 不能为空")
+		}
+		return ids, nil
+	}
+	adminIDRaw := getString(values, "QDR_TELEGRAM_ADMIN_ID", "")
+	if adminIDRaw == "" {
+		return nil, fmt.Errorf("缺少 QDR_TELEGRAM_ADMIN_ID 或 QDR_TELEGRAM_ADMIN_IDS")
+	}
+	adminID, err := strconv.ParseInt(adminIDRaw, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("QDR_TELEGRAM_ADMIN_ID 不是有效数字")
+	}
+	return []int64{adminID}, nil
+}
+
 func (c MasterConfig) String() string {
 	return fmt.Sprintf(
-		"listen=%s public_api=%s db=%s data_dir=%s log_dir=%s admin_id=%d telegram_token=%s",
+		"listen=%s public_api=%s db=%s data_dir=%s log_dir=%s admin_ids=%d telegram_token=%s",
 		c.ListenAddr,
 		c.PublicAPIURL,
 		c.DBPath,
 		c.DataDir,
 		c.LogDir,
-		c.TelegramAdminID,
+		len(c.TelegramAdminIDs),
 		MaskSecret(c.TelegramToken),
 	)
 }

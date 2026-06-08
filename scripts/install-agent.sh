@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 PREFIX="/usr/local/bin"
 ETC_DIR="/etc/quota-dns-router"
 DATA_DIR="/var/lib/quota-dns-router"
@@ -570,15 +570,18 @@ install_agent_from_release() {
   local arch repo_no_git release_base package_name package_url sums_url expected
 
   arch="$(detect_linux_arch)"
-  if [ "$arch" != "amd64" ]; then
-    echo "当前 release 仅提供 linux/amd64 二进制。" >&2
-    echo "如需在当前架构安装，请使用：" >&2
-    echo "QDR_INSTALL_MODE=source ..." >&2
-    return 1
-  fi
+  case "$arch" in
+    amd64|arm64) ;;
+    *)
+      echo "当前 release 仅提供 linux/amd64 和 linux/arm64 二进制。" >&2
+      echo "如需在当前架构安装，请使用：" >&2
+      echo "QDR_INSTALL_MODE=source ..." >&2
+      return 1
+      ;;
+  esac
   repo_no_git="${REPO%.git}"
   release_base="${repo_no_git}/releases/download/v${VERSION}"
-  package_name="${BIN_NAME}_linux_amd64.tar.gz"
+  package_name="${BIN_NAME}_linux_${arch}.tar.gz"
   package_url="${release_base}/${package_name}"
   sums_url="${release_base}/SHA256SUMS"
   expected="quota-dns-router agent ${VERSION}"

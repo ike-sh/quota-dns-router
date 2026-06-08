@@ -99,6 +99,30 @@ func run(args []string) error {
 			return err
 		}
 		fmt.Print(master.FormatTelegramStatus(status))
+	case "backup":
+		cfg, err := config.LoadMaster(cfgPath)
+		if err != nil {
+			return err
+		}
+		dest := flagValue(args[1:], "--output", "")
+		path, err := master.BackupDatabase(cfg.DBPath, dest)
+		if err != nil {
+			return err
+		}
+		fmt.Println("备份完成：", path)
+	case "restore":
+		cfg, err := config.LoadMaster(cfgPath)
+		if err != nil {
+			return err
+		}
+		src := flagValue(args[1:], "--from", "")
+		if src == "" {
+			return fmt.Errorf("restore 需要 --from <backup.db>")
+		}
+		if err := master.RestoreDatabase(src, cfg.DBPath); err != nil {
+			return err
+		}
+		fmt.Println("恢复完成：", cfg.DBPath)
 	case "version":
 		fmt.Println(version.MasterString())
 	default:
@@ -115,6 +139,8 @@ func printHelp() {
   config-check [--config path]
   telegram-status [--config path]
   migrate [--config path]
+  backup [--config path] [--output path]
+  restore --from <backup.db> [--config path]
   version`)
 }
 

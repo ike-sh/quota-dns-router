@@ -38,7 +38,7 @@ func TestStatusReportShowsPendingDNSBinding(t *testing.T) {
 	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", 120, false, true); err != nil {
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "", "A", 120, false, true); err != nil {
 		t.Fatal(err)
 	}
 	overview, err := BuildStatusOverview(ctx, store, "https://example.com", nil, time.Now())

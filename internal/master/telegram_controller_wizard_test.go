@@ -394,7 +394,7 @@ func TestNodesWizardCreatesNodeWithDNSPrefersAgent(t *testing.T) {
 	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 120, false, true); err != nil {
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 120, false, true); err != nil {
 		t.Fatal(err)
 	}
 	for _, action := range []func() error{
@@ -493,6 +493,7 @@ func TestDNSWizardSavesExistingRecord(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
 		t.Fatal(err)
 	}
+	selectDNSRecordTypeA(t, controller, ctx, 1)
 	if controller.sessions[1] != pendingDNSRecordName {
 		t.Fatalf("expected pending dns record name, got %q", controller.sessions[1])
 	}
@@ -532,10 +533,10 @@ func TestDNSWizardAutoCreatesDefaultGroupWhenMissing(t *testing.T) {
 	if group.Name != "default" {
 		t.Fatalf("unexpected default group: %+v", group)
 	}
-	if controller.sessions[1] != pendingDNSRecordName {
-		t.Fatalf("expected pending dns record prompt, got %q", controller.sessions[1])
+	if controller.sessions[1] != pendingDNSTypeSelect {
+		t.Fatalf("expected pending dns type select, got %q", controller.sessions[1])
 	}
-	for _, want := range []string{"已自动创建默认分组 default", "当前分组：default"} {
+	for _, want := range []string{"已自动创建默认分组 default", "当前分组：default", "A 记录（IPv4）"} {
 		if !rec.contains(want) {
 			t.Fatalf("expected auto default group hint %q, got %v", want, rec.payloads)
 		}
@@ -578,6 +579,7 @@ func TestDNSWizardCreatesRecordShowsAgentNextStep(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
 		t.Fatal(err)
 	}
+	selectDNSRecordTypeA(t, controller, ctx, 1)
 	if err := controller.handleText(ctx, 1, "hk"); err != nil {
 		t.Fatal(err)
 	}
@@ -610,6 +612,7 @@ func TestDNSWizardSavesPendingRecordWhenNoNodes(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
 		t.Fatal(err)
 	}
+	selectDNSRecordTypeA(t, controller, ctx, 1)
 	if err := controller.handleText(ctx, 1, "hk"); err != nil {
 		t.Fatal(err)
 	}
@@ -673,6 +676,7 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 	if err := controller.handleCallback(ctx, 1, "dns_group:"+group.ID); err != nil {
 		t.Fatal(err)
 	}
+	selectDNSRecordTypeA(t, controller, ctx, 1)
 	if err := controller.handleText(ctx, 1, "hk"); err != nil {
 		t.Fatal(err)
 	}
@@ -721,7 +725,7 @@ func TestDNSDetailShowsTTLAndCanUpdateTTL(t *testing.T) {
 	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.handleCallback(ctx, 1, "dns_view:"+group.ID); err != nil {
@@ -768,7 +772,7 @@ func TestDNSTTLPromptCleansUpAfterSuccess(t *testing.T) {
 	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.handleUpdate(ctx, telegram.Update{
@@ -1295,7 +1299,7 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 120, false, true); err != nil {
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 120, false, true); err != nil {
 		t.Fatal(err)
 	}
 	if err := controller.Store.UpdateGroupCurrentNode(ctx, group.ID, oldNode.ID); err != nil {
@@ -1325,6 +1329,13 @@ func TestManualSwitchWritesManualTriggerHistory(t *testing.T) {
 	}
 	if !rec.contains("手动切换完成") {
 		t.Fatalf("expected manual switch success message, got %v", rec.messages)
+	}
+}
+
+func selectDNSRecordTypeA(t *testing.T, controller *TelegramController, ctx context.Context, chatID int64) {
+	t.Helper()
+	if err := controller.handleCallback(ctx, chatID, "dns_type:A"); err != nil {
+		t.Fatal(err)
 	}
 }
 

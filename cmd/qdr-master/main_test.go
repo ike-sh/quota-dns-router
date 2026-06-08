@@ -45,7 +45,7 @@ func TestMasterVersionOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	want := "quota-dns-router master 0.1.0"
+	want := "quota-dns-router master 0.2.0"
 	if strings.TrimSpace(got) != want {
 		t.Fatalf("got %q want %q", strings.TrimSpace(got), want)
 	}

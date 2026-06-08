@@ -71,7 +71,7 @@ func TestThresholdNotificationDedupesWithinCycleAndResetsNextCycle(t *testing.T)
 	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
 		t.Fatal(err)
 	}
 	policy, err := store.GetPolicy(ctx)
@@ -139,7 +139,7 @@ func TestNoTargetNotificationDedupes(t *testing.T) {
 	}
 	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
 	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
-	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true)
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true)
 	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
 	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 900, now))
 	notifier := &fakeNotifier{}
@@ -183,7 +183,7 @@ func TestOfflineAndRecoveryNotifications(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
-	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true)
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true)
 	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
 	firstReport := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
 	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 100, firstReport))
@@ -252,6 +252,134 @@ func TestNeverReportedNodeDoesNotSendOfflineNotification(t *testing.T) {
 	}
 }
 
+func TestResolveCurrentNodeReturnsErrorWhenDNSDoesNotMatchNode(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	cfg, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usages, err := store.ListNodeUsagesByGroup(ctx, group.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store, nil, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: "198.51.100.99", TTL: 60},
+	})
+	_, err = svc.ResolveCurrentNode(ctx, group, cfg, usages)
+	var unresolved *CurrentNodeUnresolvedError
+	if !errors.As(err, &unresolved) {
+		t.Fatalf("expected CurrentNodeUnresolvedError, got %v", err)
+	}
+	if unresolved.DNSIP != "198.51.100.99" {
+		t.Fatalf("unexpected dns ip %q", unresolved.DNSIP)
+	}
+	_ = node
+}
+
+func TestBuildDecisionNotifiesOnDNSMismatch(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "hk-01",
+		PublicIP:              "203.0.113.10",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true)
+	_ = store.BindAgentToNode(ctx, node.ID, "agent-1")
+	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.SaveAgentReport(ctx, reportFor("agent-1", node.PublicIP, 100, now))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: "198.51.100.99", TTL: 60},
+	})
+	svc.Now = func() time.Time { return now }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "未匹配任何已配置节点"); got != 1 {
+		t.Fatalf("expected one dns mismatch notification, got %d: %v", got, notifier.messages)
+	}
+}
+
+func TestMaintenanceModeSkipsAutoSwitch(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, oldNode, newNode := createSwitchFixture(t, ctx, store)
+	if err := store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := store.GetPolicy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.MaintenanceMode = true
+	if err := store.SavePolicy(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 6, 4, 1, 0, 0, 0, time.UTC)
+	_ = store.BindAgentToNode(ctx, oldNode.ID, "agent-old")
+	_ = store.BindAgentToNode(ctx, newNode.ID, "agent-new")
+	_ = store.SaveAgentReport(ctx, reportFor("agent-old", oldNode.PublicIP, 900, now))
+	_ = store.SaveAgentReport(ctx, reportFor("agent-new", newNode.PublicIP, 100, now))
+	notifier := &fakeNotifier{}
+	svc := NewService(store, notifier, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: oldNode.PublicIP, TTL: 60},
+	})
+	svc.Now = func() time.Time { return now }
+	if err := svc.HandleGroup(ctx, group.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := countMessagesContaining(notifier.messages, "DNS 自动切换成功"); got != 0 {
+		t.Fatalf("expected no auto switch during maintenance, got %v", notifier.messages)
+	}
+}
+
 func TestSwitchFailureNotificationIsSanitized(t *testing.T) {
 	store := testMasterStore(t)
 	ctx := context.Background()
@@ -259,7 +387,7 @@ func TestSwitchFailureNotificationIsSanitized(t *testing.T) {
 	if err := store.SaveCloudflareDefaults(ctx, "cf_secret_abcd", "example.com", "zone-1"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", 60, false, true); err != nil {
+	if _, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true); err != nil {
 		t.Fatal(err)
 	}
 	notifier := &fakeNotifier{}

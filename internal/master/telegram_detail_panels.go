@@ -312,7 +312,7 @@ func (c *TelegramController) saveDNSOptions(ctx context.Context, groupID string,
 		_ = c.Store.SetStatusNote(ctx, noteKeyDNSUpdate(group.ID), "✅ DNS 修改成功")
 		_ = c.Store.ClearLastError(ctx, errorKeyDNSUpdate(group.ID))
 	}
-	updated, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, cfg.RecordName, cfg.RecordID, nextTTL, nextProxied, cfg.AllowOverride)
+	updated, err := c.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, cfg.RecordName, cfg.RecordID, dnsRecordType(cfg, ""), nextTTL, nextProxied, cfg.AllowOverride)
 	if err != nil {
 		return db.Group{}, db.CloudflareConfig{}, err
 	}

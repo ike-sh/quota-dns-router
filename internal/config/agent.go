@@ -16,6 +16,7 @@ type AgentConfig struct {
 	NodeName         string
 	Hostname         string
 	Interface        string
+	TrafficMode      string
 	Interval         time.Duration
 	StateFile        string
 	PublicIPOverride string
@@ -38,6 +39,7 @@ func LoadAgent(path, version string) (AgentConfig, error) {
 			hostname = hn
 		}
 	}
+	trafficMode := getString(values, "QDR_AGENT_TRAFFIC_MODE", "rx+tx")
 	cfg := AgentConfig{
 		EnvPath:          path,
 		MasterAPIURL:     getString(values, "QDR_MASTER_API_URL", ""),
@@ -46,6 +48,7 @@ func LoadAgent(path, version string) (AgentConfig, error) {
 		NodeName:         getString(values, "QDR_AGENT_NODE_NAME", ""),
 		Hostname:         hostname,
 		Interface:        getString(values, "QDR_AGENT_IFACE", "auto"),
+		TrafficMode:      trafficMode,
 		Interval:         interval,
 		StateFile:        getString(values, "QDR_AGENT_STATE_FILE", "/var/lib/quota-dns-router/agent-state.json"),
 		PublicIPOverride: getString(values, "QDR_AGENT_PUBLIC_IP_OVERRIDE", ""),
