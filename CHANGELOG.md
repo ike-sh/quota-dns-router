@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.3.2
+
+- 新增 [`docs/telegram-ops-cheatsheet.md`](docs/telegram-ops-cheatsheet.md)：Telegram 命令速查与扩展告警场景排查表。
+
 ## 0.2.3.1
 
 - README 同步 Route53、只读 Web 面板、AAAA 等当前能力；修正「仅 Cloudflare」等过时描述。

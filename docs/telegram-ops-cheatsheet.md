@@ -80,14 +80,60 @@
 | `手动切换` | 选分组与目标节点 |
 | `/switch <分组名> <节点名>` | 命令行手动切换 |
 
-## 常见告警含义
+## 告警与通知速查
 
-| 状态 / 告警 | 处理 |
-|-------------|------|
-| `agent_traffic_mode_mismatch` | 核对 Agent env 与节点 `mode`，必要时重新 join |
-| `dns_unmatched` | 当前 DNS IP 无匹配节点，检查记录与节点 IP |
-| `offline` / `recovered` | 节点离线或恢复，关注 Agent systemd |
-| `threshold` | 流量达阈值，将自动切换或仅通知（视策略） |
+在 **当前状态** 面板的「当前风险 / 最近失败」或 Telegram 推送中常见如下类型。
+
+### Telegram 推送（notify_once 去重）
+
+| 类型 | 典型文案 | 含义 | 建议处理 |
+|------|----------|------|----------|
+| `threshold` | 流量达到阈值 | 当前节点用量超过阈值百分比 | 若 `auto_switch=true` 将尝试切换；`notify_only=true` 仅通知 |
+| `dns_unmatched` | DNS 未匹配任何节点 | 记录 IP 与所有节点 `public_ip` 不一致 | 核对 DNS 指向、节点 IP、A/AAAA 类型是否匹配 |
+| `no_target` | 无可用切换目标 | 阈值/离线触发但无合格备用节点 | 检查备用节点是否启用、`auto_switch`、优先级、cooldown |
+| `offline` | 节点离线 | 超过 `agent_offline_seconds` 未上报 | 检查 Agent systemd、Master 公网 URL、防火墙 |
+| `recovered` | 节点恢复 | 曾离线且已重新上报 | 确认流量统计是否跳变；必要时校准本账期用量 |
+| `traffic_mode_mismatch` | Agent 统计模式不一致 | 上报 `traffic_mode` ≠ 节点策略 | 修正 `QDR_AGENT_TRAFFIC_MODE` 或节点 `mode` 后 re-join |
+| 切换成功 | `DNS 自动切换成功` | Cloudflare/Route53 已更新记录 | 验证 DNS 传播与业务连通 |
+| 切换失败 | `DNS 自动切换失败` | API 调用失败 | 查 Token/IAM 权限、Zone、记录 ID、限流 |
+| 手动切换 | 成功/失败通知 | 同自动切换，触发原因为 manual | 查看切换历史面板 |
+
+### 状态面板 / `qdr-master status` 风险项
+
+| 错误键 / 描述 | 含义 | 建议处理 |
+|---------------|------|----------|
+| `cloudflare_zone_lookup` | Zone 查询失败 | 检查 Token、Zone 名/ID、网络 |
+| `dns_lookup:<group>` | 分组 DNS 查询失败 | 记录名、Zone、服务商凭证 |
+| `dns_update:<group>` | DNS 修改失败 | 权限不足、记录被锁定、API 错误详情 |
+| `agent_install_command` | 安装命令生成失败 | 补全 Master URL、分组、节点、DNS 配置 |
+| `agent_report_auth` | Agent Token 鉴权失败 | Agent env 与 Master 侧 token 不一致，重新 join |
+| `agent_traffic_mode_mismatch` | 统计模式不一致 | 见上表 |
+| `notification_delivery` | Telegram 发送失败 | Bot Token、网络、管理员 ID |
+| Master 公网地址警告 | URL 为 localhost | `/config_master_url` 改为 Agent 可达地址 |
+| 缺少 Cloudflare Token / Route53 Zone | 初始化不完整 | 完成 DNS 服务商向导 |
+| 维护窗口已开启 | `maintenance_mode=true` | 自动切换暂停；手动切换仍可用 |
+
+### 按场景排查
+
+**DNS 一直不切**
+
+1. `当前状态` → 分组 cooldown 是否未过
+2. 维护窗口是否开启
+3. `notify_only` 是否为 true
+4. 目标节点 `enabled` / `auto_switch` / 优先级
+5. DNS 当前 IP 能否 `ResolveCurrentNode`（无 `dns_unmatched`）
+
+**流量统计不准**
+
+1. `qdr-agent status` 网卡是否正确
+2. `traffic_mode` 是否与节点一致（rx / tx / both）
+3. 是否需本账期用量校准（Telegram 节点详情）
+
+**Agent 频繁离线**
+
+1. `systemctl status qdr-agent`
+2. Master `QDR_MASTER_PUBLIC_API_URL` 从 Agent 主机 `curl` 可达
+3. `agent_offline_seconds` / `offline_notify_seconds` 策略是否过短
 
 ## CLI 对照（SSH 到 Master）
 

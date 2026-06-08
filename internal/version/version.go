@@ -2,7 +2,7 @@ package version
 
 import "fmt"
 
-const Version = "0.2.3.1"
+const Version = "0.2.3.2"
 
 const releaseRepo = "ike-sh/quota-dns-router"
 
