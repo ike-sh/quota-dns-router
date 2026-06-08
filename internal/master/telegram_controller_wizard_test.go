@@ -704,6 +704,38 @@ func TestDNSWizardOffersRepointWhenIPDoesNotMatchNode(t *testing.T) {
 	}
 }
 
+func TestDNSDetailShowsAAAARecordType(t *testing.T) {
+	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{
+		record: cloudflare.DNSRecord{
+			ID:      "rec-aaaa",
+			Type:    "AAAA",
+			Name:    "ipv6.example.com",
+			Content: "2001:db8::1",
+			TTL:     60,
+			Proxied: false,
+		},
+	})
+	ctx := context.Background()
+	group, err := controller.Store.CreateGroup(ctx, "ipv6", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.Store.SaveCloudflareDefaults(ctx, "cf_secret_token_123456", "example.com", "zone-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := controller.Store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "ipv6.example.com", "rec-aaaa", "AAAA", 60, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := controller.handleCallback(ctx, 1, "dns_view:"+group.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"记录类型：AAAA", "当前 AAAA 记录：2001:db8::1"} {
+		if !rec.contains(want) {
+			t.Fatalf("expected dns detail payload to contain %q, got %v", want, rec.payloads)
+		}
+	}
+}
+
 func TestDNSDetailShowsTTLAndCanUpdateTTL(t *testing.T) {
 	updates := []dnsUpdateCall{}
 	controller, rec := newTestTelegramControllerWithDNS(t, fakeDNS{

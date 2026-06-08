@@ -57,13 +57,14 @@
 
 ## P3 — 功能扩展
 
-### #11 AAAA 记录支持（待做）
-- 扩展 `DNSProvider` 接口
-- Telegram 向导适配
+### ✅ #11 AAAA 记录支持
+- `DNSProvider` `*WithType` 方法与迁移 `005_record_type.sql`
+- Telegram 向导：A / AAAA 类型选择
+- DNS 详情 / 摘要面板显示记录类型
 
-### #12 多 Telegram 管理员（待做）
-- `QDR_TELEGRAM_ADMIN_IDS` 逗号分隔
-- 只读观察者角色
+### ✅ #12 多 Telegram 管理员（基础）
+- `QDR_TELEGRAM_ADMIN_IDS` 逗号分隔，通知广播全部管理员
+- 待做：只读观察者角色（细粒度 RBAC）
 
 ### ✅ #13 维护窗口
 - Policy `maintenance_mode` 开关
@@ -73,4 +74,13 @@
 ## P4 — 可选（按需）
 
 ### #14 第二 DNS 服务商（Route53 / DNSPod）
-### #15 只读 Web 状态面板（embed.FS + /api/status）
+- 抽象 `DNSProvider` 已有 Cloudflare 实现，可新增 adapter
+- 建议 v0.3.0 里程碑
+
+### #15 只读 Web 状态面板（推荐下一项）
+- `embed.FS` 静态页 + 已有 `/api/status` 或新建只读 JSON
+- 无需 Telegram 即可查看分组 / 节点 / DNS 状态
+- 可选 Bearer 只读 Token（`QDR_STATUS_READONLY_TOKEN`）
+
+### #16 Telegram 只读观察者
+- `QDR_TELEGRAM_OBSERVER_IDS`：可查看状态，不可修改配置

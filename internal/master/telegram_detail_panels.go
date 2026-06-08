@@ -120,11 +120,13 @@ func (c *TelegramController) sendDNSDetail(ctx context.Context, chatID int64, gr
 			}
 		}
 	}
+	recordType := dnsRecordType(cfg, "")
 	text := prefix + "🌐 DNS 详情\n\n"
 	text += "分组：" + group.Name + "\n"
 	text += "域名：" + valueOrDash(cfg.RecordName) + "\n"
+	text += "记录类型：" + recordType + "\n"
 	text += "Record ID：" + valueOrDash(cfg.RecordID) + "\n"
-	text += "当前 A 记录：" + valueOrDash(currentIP) + "\n"
+	text += formatDNSCurrentRecordLine(recordType, currentIP) + "\n"
 	text += "匹配节点：" + valueOrDash(matchedNode) + "\n"
 	text += fmt.Sprintf("proxied：%t\n", cfg.Proxied)
 	text += "TTL：" + formatDNSTTL(cfg.TTL)

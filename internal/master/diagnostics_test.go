@@ -2,6 +2,7 @@ package master
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -47,8 +48,13 @@ func (f fakeDNS) LookupDNSRecord(ctx context.Context, token, zoneID, recordName 
 }
 
 func (f fakeDNS) LookupDNSRecordWithType(ctx context.Context, token, zoneID, recordName, recordType string) (cloudflare.DNSRecord, error) {
-	_ = recordType
-	return f.record, f.recordErr
+	if f.recordErr != nil {
+		return f.record, f.recordErr
+	}
+	if recordType != "" && f.record.Type != "" && f.record.Type != recordType {
+		return cloudflare.DNSRecord{}, fmt.Errorf("record type mismatch: want %s got %s", recordType, f.record.Type)
+	}
+	return f.record, nil
 }
 
 func (f fakeDNS) LookupDNSRecordAnyType(ctx context.Context, token, zoneID, recordName string) (cloudflare.DNSRecord, error) {
@@ -135,6 +141,43 @@ func TestDNSSummaryOutput(t *testing.T) {
 	text := FormatDNSSummaries(items)
 	if !containsString(text, "匹配节点：hk-01") {
 		t.Fatalf("expected matched node: %s", text)
+	}
+	if !containsString(text, "记录类型：A") {
+		t.Fatalf("expected record type in summary: %s", text)
+	}
+}
+
+func TestDNSSummaryOutputAAAA(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, _ := store.CreateGroup(ctx, "ipv6", 600)
+	_, _ = store.CreateNode(ctx, db.Node{
+		GroupID:               group.ID,
+		Name:                  "ipv6-01",
+		PublicIP:              "2001:db8::1",
+		MonthlyQuotaBytes:     1000,
+		ThresholdPercent:      80,
+		ResetDay:              1,
+		TrafficMode:           db.TrafficModeBoth,
+		Enabled:               true,
+		AutoSwitch:            true,
+		Priority:              10,
+		PreferredIface:        "auto",
+		ReportIntervalSeconds: 60,
+	})
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	_, _ = store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "ipv6.example.com", "rec-aaaa", "AAAA", 60, false, true)
+	items, err := BuildDNSSummaries(ctx, store, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-aaaa", Type: "AAAA", Name: "ipv6.example.com", Content: "2001:db8::1", TTL: 60},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := FormatDNSSummaries(items)
+	for _, want := range []string{"记录类型：AAAA", "当前 AAAA 记录：2001:db8::1", "匹配节点：ipv6-01"} {
+		if !containsString(text, want) {
+			t.Fatalf("expected %q in summary, got %s", want, text)
+		}
 	}
 }
 

@@ -34,6 +34,7 @@ type DNSSummary struct {
 	GroupID         string
 	RecordName      string
 	RecordID        string
+	RecordType      string
 	Pending         bool
 	CurrentIP       string
 	MatchedNodeName string
@@ -162,11 +163,13 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 		if err != nil {
 			return nil, err
 		}
+		recordType := dnsRecordType(cfg, "")
 		summary := DNSSummary{
 			GroupName:      group.Name,
 			GroupID:        group.ID,
 			RecordName:     cfg.RecordName,
 			RecordID:       cfg.RecordID,
+			RecordType:     recordType,
 			Pending:        strings.TrimSpace(cfg.RecordName) != "" && strings.TrimSpace(cfg.RecordID) == "",
 			Proxied:        cfg.Proxied,
 			TTL:            cfg.TTL,
@@ -176,7 +179,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 			NextSuggestion: []string{"执行 /dns set " + group.Name + " " + cfg.RecordName},
 		}
 		if dns != nil && cfg.ZoneID != "" && cfg.RecordName != "" {
-			rec, aErr := dns.LookupDNSRecord(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
+			rec, aErr := dns.LookupDNSRecordWithType(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName, recordType)
 			if aErr != nil {
 				if summary.Pending {
 					summary.Status = "⏳ 待绑定节点"
@@ -188,7 +191,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 				}
 				any, anyErr := dns.LookupDNSRecordAnyType(ctx, cfg.APIToken, cfg.ZoneID, cfg.RecordName)
 				if anyErr != nil {
-					msg := "未找到 DNS A 记录，请确认记录存在"
+					msg := fmt.Sprintf("未找到 DNS %s 记录，请确认记录存在", recordType)
 					_ = store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 查询失败")
 					_ = store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, cfg.APIToken)
 					summary.Status = "❌ DNS 记录不存在"
@@ -196,13 +199,13 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 					summary.LastError = msg
 					summary.NextSuggestion = []string{"确认 Record Name 正确", "确认 Cloudflare 中已存在该记录", "重新执行 /dns set"}
 				} else {
-					msg := fmt.Sprintf("记录存在，但类型为 %s，不是 A 记录", any.Type)
+					msg := fmt.Sprintf("记录存在，但类型为 %s，不是 %s 记录", any.Type, recordType)
 					_ = store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "❌ DNS 记录类型错误")
 					_ = store.SaveLastError(ctx, errorKeyDNSLookup(group.ID), msg, cfg.APIToken)
-					summary.Status = "❌ 记录不是 A 记录"
+					summary.Status = fmt.Sprintf("❌ 记录不是 %s 记录", recordType)
 					summary.LastResult = "❌ DNS 记录类型错误"
 					summary.LastError = msg
-					summary.NextSuggestion = []string{"请改为 A 记录", "重新执行 /dns set"}
+					summary.NextSuggestion = []string{fmt.Sprintf("请改为 %s 记录", recordType), "重新执行 /dns set"}
 				}
 			} else {
 				if summary.Pending {
@@ -214,6 +217,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 				summary.Proxied = rec.Proxied
 				summary.CurrentIP = rec.Content
 				summary.RecordID = rec.ID
+				summary.RecordType = rec.Type
 				_ = store.SetStatusNote(ctx, noteKeyDNSLookup(group.ID), "✅ DNS 记录查询成功")
 				_ = store.ClearLastError(ctx, errorKeyDNSLookup(group.ID))
 				for _, node := range nodes {
@@ -227,7 +231,7 @@ func BuildDNSSummaries(ctx context.Context, store *db.Store, dns DNSProvider) ([
 					summary.Status = "⚠️ DNS IP 未匹配任何节点"
 					summary.LastResult = "✅ DNS 记录查询成功"
 					summary.LastError = "-"
-					summary.NextSuggestion = []string{"确认当前 A 记录 IP 与某个节点公网 IP 一致", "自动切换在 DNS IP 匹配节点时更可靠"}
+					summary.NextSuggestion = []string{fmt.Sprintf("确认当前 %s 记录值与某个节点公网 IP 一致", recordType), "自动切换在 DNS IP 匹配节点时更可靠"}
 				} else {
 					summary.Status = "✅ DNS 记录正常"
 					summary.LastResult = "✅ DNS 记录查询成功"
@@ -488,7 +492,7 @@ func FormatCloudflareSummary(summary CloudflareSummary) string {
 
 func FormatDNSSummaries(items []DNSSummary) string {
 	if len(items) == 0 {
-		return "🌐 DNS 配置\n\n尚未配置任何分组的 DNS A 记录。\n下一步：点击 DNS 面板里的“添加 DNS A 记录”；没有分组时会自动创建 default。"
+		return "🌐 DNS 配置\n\n尚未配置任何分组的 DNS 记录。\n下一步：点击 DNS 面板里的“添加 DNS 记录”；没有分组时会自动创建 default。"
 	}
 	var b strings.Builder
 	b.WriteString("🌐 DNS 配置\n")
@@ -496,8 +500,9 @@ func FormatDNSSummaries(items []DNSSummary) string {
 		b.WriteString("\n\n")
 		b.WriteString(item.GroupName + "\n")
 		b.WriteString("域名：" + valueOrDash(item.RecordName) + "\n")
+		b.WriteString("记录类型：" + formatDNSRecordType(item.RecordType) + "\n")
 		b.WriteString("Record ID：" + valueOrDash(item.RecordID) + "\n")
-		b.WriteString("当前 A 记录：" + valueOrDash(item.CurrentIP) + "\n")
+		b.WriteString(formatDNSCurrentRecordLine(item.RecordType, item.CurrentIP) + "\n")
 		b.WriteString("匹配节点：" + valueOrDash(item.MatchedNodeName) + "\n")
 		b.WriteString(fmt.Sprintf("proxied：%t\n", item.Proxied))
 		b.WriteString("TTL：" + formatDNSTTL(item.TTL) + "\n")
