@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.2.1 (unreleased)
+
+- 只读 Web 状态面板：`GET /`、`/status` 与 `GET /api/status` JSON API。
+- 可选 `QDR_STATUS_READONLY_TOKEN` Bearer 鉴权。
+- HTTP `clientIP` 仅在可信反代（loopback/私网）时信任 `X-Forwarded-For` / `X-Real-IP`。
+- join 限流 map 自动清理过期 IP 条目。
+
 ## 0.2.0
 
 - HTTP API 安全加固：请求体大小限制、join 限流、访问日志。

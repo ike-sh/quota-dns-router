@@ -14,9 +14,11 @@ import (
 )
 
 type HTTPServer struct {
-	Store        *db.Store
-	PublicAPIURL string
-	Service      *Service
+	Store               *db.Store
+	PublicAPIURL        string
+	Service             *Service
+	DNS                 DNSProvider
+	StatusReadonlyToken string
 }
 
 func (s HTTPServer) Handler() http.Handler {
@@ -25,6 +27,9 @@ func (s HTTPServer) Handler() http.Handler {
 	health := HealthChecker{Store: s.Store}
 	mux.HandleFunc("/healthz", health.liveness)
 	mux.HandleFunc("/readyz", health.readiness)
+	mux.HandleFunc("/api/status", withAccessLog(s.serveStatusAPI))
+	mux.HandleFunc("/", withAccessLog(s.serveStatusUI))
+	mux.HandleFunc("/status", withAccessLog(s.serveStatusUI))
 	mux.HandleFunc("/api/agent/join",
 		withAccessLog(withJoinRateLimit(joinLimiter,
 			withMaxBodyBytes(s.join, maxRequestBodyBytes),
@@ -136,7 +141,13 @@ func writeJSON(w http.ResponseWriter, v any) {
 func StartHTTP(ctx context.Context, cfg config.MasterConfig, store *db.Store, service *Service) error {
 	server := &http.Server{
 		Addr:    cfg.ListenAddr,
-		Handler: HTTPServer{Store: store, PublicAPIURL: cfg.PublicAPIURL, Service: service}.Handler(),
+		Handler: HTTPServer{
+			Store:               store,
+			PublicAPIURL:        cfg.PublicAPIURL,
+			Service:             service,
+			DNS:                 service.DNS,
+			StatusReadonlyToken: cfg.StatusReadonlyToken,
+		}.Handler(),
 	}
 	errCh := make(chan error, 1)
 	go func() {

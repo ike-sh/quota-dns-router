@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>quota-dns-router 状态</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0f1419; --card:#1a2332; --text:#e7ecf3; --muted:#8b9bb4; --accent:#3d8bfd; --ok:#3dd68c; --warn:#f5c542; --err:#f87171; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; }
+    header { padding: 1.25rem 1.5rem; border-bottom: 1px solid #2a3548; display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+    .meta { color: var(--muted); font-size: 0.875rem; }
+    main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; display: grid; gap: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; }
+    .card { background: var(--card); border: 1px solid #2a3548; border-radius: 10px; padding: 1rem 1.1rem; }
+    .card h2 { margin: 0 0 0.75rem; font-size: 0.95rem; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+    .stat { font-size: 1.5rem; font-weight: 700; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    th, td { text-align: left; padding: 0.45rem 0.35rem; border-bottom: 1px solid #2a3548; vertical-align: top; }
+    th { color: var(--muted); font-weight: 600; }
+    .pill { display: inline-block; padding: 0.1rem 0.45rem; border-radius: 999px; font-size: 0.75rem; }
+    .ok { background: rgba(61,214,140,.15); color: var(--ok); }
+    .warn { background: rgba(245,197,66,.15); color: var(--warn); }
+    .err { background: rgba(248,113,113,.15); color: var(--err); }
+    #error { display: none; color: var(--err); padding: 0.75rem 1rem; background: rgba(248,113,113,.1); border-radius: 8px; }
+    ul.risks { margin: 0; padding-left: 1.1rem; }
+    ul.risks li { margin: 0.25rem 0; }
+    @media (max-width: 640px) { main { padding: 1rem; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>quota-dns-router</h1>
+      <div class="meta">只读状态面板 · 自动刷新 30s</div>
+    </div>
+    <div class="meta" id="updated">加载中…</div>
+  </header>
+  <main>
+    <div id="error"></div>
+    <div class="grid" id="summary-cards"></div>
+    <div class="card">
+      <h2>节点</h2>
+      <div style="overflow-x:auto"><table id="nodes"><thead><tr><th>名称</th><th>分组</th><th>公网 IP</th><th>在线</th><th>用量</th><th>阈值</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>DNS</h2>
+      <div style="overflow-x:auto"><table id="dns"><thead><tr><th>分组</th><th>域名</th><th>类型</th><th>当前值</th><th>匹配节点</th><th>状态</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div class="card" id="risks-card" style="display:none">
+      <h2>风险提示</h2>
+      <ul class="risks" id="risks"></ul>
+    </div>
+  </main>
+  <script>
+    const token = new URLSearchParams(location.search).get('token') || '';
+    const headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+    function pill(text, kind) {
+      const span = document.createElement('span');
+      span.className = 'pill ' + (kind || 'ok');
+      span.textContent = text;
+      return span;
+    }
+    function fmtBytes(n) {
+      if (n == null) return '-';
+      const u = ['B','KB','MB','GB','TB'];
+      let i = 0, v = Number(n);
+      while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+      return v.toFixed(i ? 1 : 0) + ' ' + u[i];
+    }
+    function render(data) {
+      document.getElementById('updated').textContent = '更新于 ' + new Date(data.generatedAt).toLocaleString();
+      const s = data.summary || {};
+      const cards = [
+        ['分组', s.groupCount ?? 0],
+        ['节点', s.nodeCount ?? 0],
+        ['在线 Agent', s.onlineAgentCount ?? 0],
+        ['离线 Agent', s.offlineAgentCount ?? 0],
+      ];
+      const sc = document.getElementById('summary-cards');
+      sc.innerHTML = '';
+      cards.forEach(([label, val]) => {
+        const el = document.createElement('div');
+        el.className = 'card';
+        el.innerHTML = '<h2>' + label + '</h2><div class="stat">' + val + '</div>';
+        sc.appendChild(el);
+      });
+      const nt = document.querySelector('#nodes tbody');
+      nt.innerHTML = '';
+      (data.nodes || []).forEach(n => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = '<td>' + n.name + '</td><td>' + (n.groupName || '-') + '</td><td>' + (n.publicIP || '-') + '</td><td></td><td>' + fmtBytes(n.usedBytes) + ' / ' + fmtBytes(n.monthlyQuotaBytes) + '</td><td>' + (n.thresholdPercent ?? '-') + '%</td>';
+        tr.children[3].appendChild(pill(n.online ? '在线' : '离线', n.online ? 'ok' : 'warn'));
+        nt.appendChild(tr);
+      });
+      const dt = document.querySelector('#dns tbody');
+      dt.innerHTML = '';
+      (data.dns || []).forEach(d => {
+        const tr = document.createElement('tr');
+        const kind = (d.status || '').includes('❌') ? 'err' : (d.status || '').includes('⚠') ? 'warn' : 'ok';
+        tr.innerHTML = '<td>' + d.groupName + '</td><td>' + (d.recordName || '-') + '</td><td>' + (d.recordType || 'A') + '</td><td>' + (d.currentIP || '-') + '</td><td>' + (d.matchedNodeName || '-') + '</td><td></td>';
+        tr.children[5].appendChild(pill(d.status || '-', kind));
+        dt.appendChild(tr);
+      });
+      const risks = (data.risks && data.risks.items) || [];
+      const rc = document.getElementById('risks-card');
+      const rl = document.getElementById('risks');
+      if (risks.length) {
+        rc.style.display = '';
+        rl.innerHTML = risks.map(r => '<li>' + r + '</li>').join('');
+      } else {
+        rc.style.display = 'none';
+      }
+    }
+    async function load() {
+      const errEl = document.getElementById('error');
+      errEl.style.display = 'none';
+      try {
+        const res = await fetch('/api/status', { headers });
+        if (!res.ok) throw new Error(res.status + ' ' + (await res.text()));
+        render(await res.json());
+      } catch (e) {
+        errEl.textContent = '加载失败：' + e.message;
+        errEl.style.display = 'block';
+      }
+    }
+    load();
+    setInterval(load, 30000);
+  </script>
+</body>
+</html>

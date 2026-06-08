@@ -37,8 +37,12 @@ func (l *joinRateLimiter) allow(key string, now time.Time) bool {
 			filtered = append(filtered, ts)
 		}
 	}
-	if len(filtered) >= l.limit {
+	if len(filtered) == 0 {
+		delete(l.entries, key)
+	} else {
 		l.entries[key] = filtered
+	}
+	if len(filtered) >= l.limit {
 		return false
 	}
 	filtered = append(filtered, now)
@@ -46,19 +50,31 @@ func (l *joinRateLimiter) allow(key string, now time.Time) bool {
 	return true
 }
 
+func isTrustedProxy(ip string) bool {
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsLoopback() || parsed.IsPrivate()
+}
+
 func clientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		parts := strings.Split(xff, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
-		}
-	}
-	if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-		return xri
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if isTrustedProxy(host) {
+		if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+			parts := strings.Split(xff, ",")
+			if len(parts) > 0 {
+				if ip := strings.TrimSpace(parts[0]); ip != "" {
+					return ip
+				}
+			}
+		}
+		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
+			return xri
+		}
 	}
 	return host
 }

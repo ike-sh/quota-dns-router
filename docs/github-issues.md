@@ -77,9 +77,9 @@
 - 抽象 `DNSProvider` 已有 Cloudflare 实现，可新增 adapter
 - 建议 v0.3.0 里程碑
 
-### #15 只读 Web 状态面板（推荐下一项）
-- `embed.FS` 静态页 + 已有 `/api/status` 或新建只读 JSON
-- 无需 Telegram 即可查看分组 / 节点 / DNS 状态
+### ✅ #15 只读 Web 状态面板
+- `embed.FS` 静态页 `/`、`/status` + `GET /api/status` JSON
+- 无需 Telegram 即可查看节点 / DNS / 风险摘要
 - 可选 Bearer 只读 Token（`QDR_STATUS_READONLY_TOKEN`）
 
 ### #16 Telegram 只读观察者

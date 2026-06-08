@@ -67,10 +67,32 @@ func TestMaxBodyBytesRejectsOversizedRead(t *testing.T) {
 	}
 }
 
-func TestClientIPPrefersForwardedFor(t *testing.T) {
+func TestClientIPPrefersForwardedForFromTrustedProxy(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
 	req.Header.Set("X-Forwarded-For", "203.0.113.10, 198.51.100.20")
 	if got := clientIP(req); got != "203.0.113.10" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestClientIPIgnoresForwardedForFromUntrustedPeer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.99:54321"
+	req.Header.Set("X-Forwarded-For", "203.0.113.10")
+	if got := clientIP(req); got != "203.0.113.99" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestJoinRateLimiterPurgesStaleEntries(t *testing.T) {
+	limiter := newJoinRateLimiter(10, time.Minute)
+	base := time.Now()
+	limiter.allow("203.0.113.10", base.Add(-2*time.Minute))
+	limiter.allow("203.0.113.10", base)
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if len(limiter.entries["203.0.113.10"]) != 1 {
+		t.Fatalf("expected 1 timestamp after purge, got %d", len(limiter.entries["203.0.113.10"]))
 	}
 }

@@ -26,6 +26,7 @@ type MasterConfig struct {
 	DetectedPublicIP         string
 	SuggestedPublicAPIURL    string
 	AgentReportRetentionDays int
+	StatusReadonlyToken      string
 }
 
 func LoadMaster(path string) (MasterConfig, error) {
@@ -82,6 +83,7 @@ func LoadMaster(path string) (MasterConfig, error) {
 		DetectedPublicIP:           getString(values, "QDR_DETECTED_PUBLIC_IP", ""),
 		SuggestedPublicAPIURL:      getString(values, "QDR_SUGGESTED_PUBLIC_API_URL", ""),
 		AgentReportRetentionDays:   retentionDays,
+		StatusReadonlyToken:        getString(values, "QDR_STATUS_READONLY_TOKEN", ""),
 	}
 	if cfg.TelegramToken == "" {
 		return MasterConfig{}, fmt.Errorf("缺少 QDR_TELEGRAM_TOKEN")
