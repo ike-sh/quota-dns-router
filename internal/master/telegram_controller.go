@@ -9,12 +9,15 @@ import (
 	"quota-dns-router-go/internal/telegram"
 )
 
+const route53PlaceholderToken = "route53:aws-default"
+
 type TelegramController struct {
 	Bot               *telegram.Bot
 	Store             *db.Store
 	PublicAPIURL      string
 	PollTimeout       time.Duration
 	DNS               DNSProvider
+	DNSProviderKind   string
 	sessions          map[int64]string
 	sessionMeta       map[int64]*telegramSessionMeta
 	promptMeta        map[int64]*telegramPromptMeta
@@ -39,13 +42,14 @@ type telegramPromptMeta struct {
 	MessageID int64
 }
 
-func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL string, pollTimeout time.Duration, dns DNSProvider) *TelegramController {
+func NewTelegramController(bot *telegram.Bot, store *db.Store, publicAPIURL string, pollTimeout time.Duration, dns DNSProvider, dnsProviderKind string) *TelegramController {
 	return &TelegramController{
 		Bot:               bot,
 		Store:             store,
 		PublicAPIURL:      publicAPIURL,
 		PollTimeout:       pollTimeout,
 		DNS:               dns,
+		DNSProviderKind:   strings.ToLower(strings.TrimSpace(dnsProviderKind)),
 		sessions:          make(map[int64]string),
 		sessionMeta:       make(map[int64]*telegramSessionMeta),
 		promptMeta:        make(map[int64]*telegramPromptMeta),

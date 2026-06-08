@@ -13,6 +13,24 @@ import (
 	"quota-dns-router-go/internal/telegram"
 )
 
+func dnsProviderPanelMenu(kind string) *telegram.ReplyMarkup {
+	if strings.EqualFold(kind, "route53") {
+		return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
+			{{Text: "选择 Hosted Zone", CallbackData: "cf_select_zone"}},
+			{{Text: "查看当前配置", CallbackData: "cf_view"}},
+			{{Text: "返回主菜单", CallbackData: "menu"}},
+		}}
+	}
+	return cloudflarePanelMenu()
+}
+
+func dnsProviderNeedTokenMenu(kind string) *telegram.ReplyMarkup {
+	if strings.EqualFold(kind, "route53") {
+		return dnsProviderPanelMenu(kind)
+	}
+	return cloudflareNeedTokenMenu()
+}
+
 func cloudflarePanelMenu() *telegram.ReplyMarkup {
 	return &telegram.ReplyMarkup{InlineKeyboard: [][]telegram.InlineKeyboardButton{
 		{{Text: "配置/更新 Token", CallbackData: "cf_token"}},
@@ -38,15 +56,19 @@ func cloudflareZoneMenu() *telegram.ReplyMarkup {
 }
 
 func cloudflareZoneChoicesMenu(zones []cloudflare.Zone) *telegram.ReplyMarkup {
+	return cloudflareZoneChoicesMenuForProvider(zones, "")
+}
+
+func cloudflareZoneChoicesMenuForProvider(zones []cloudflare.Zone, providerKind string) *telegram.ReplyMarkup {
 	rows := make([][]telegram.InlineKeyboardButton, 0, len(zones)+3)
 	for i, zone := range zones {
 		rows = append(rows, []telegram.InlineKeyboardButton{{Text: zone.Name, CallbackData: fmt.Sprintf("cf_zone_pick:%d", i)}})
 	}
-	rows = append(rows,
-		[]telegram.InlineKeyboardButton{{Text: "手动输入 Zone Name", CallbackData: "cf_zone_manual"}},
-		[]telegram.InlineKeyboardButton{{Text: "重新输入 Token", CallbackData: "cf_token_reset"}},
-		[]telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}},
-	)
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "手动输入 Zone Name", CallbackData: "cf_zone_manual"}})
+	if !strings.EqualFold(providerKind, "route53") {
+		rows = append(rows, []telegram.InlineKeyboardButton{{Text: "重新输入 Token", CallbackData: "cf_token_reset"}})
+	}
+	rows = append(rows, []telegram.InlineKeyboardButton{{Text: "返回主菜单", CallbackData: "menu"}})
 	return &telegram.ReplyMarkup{InlineKeyboard: rows}
 }
 

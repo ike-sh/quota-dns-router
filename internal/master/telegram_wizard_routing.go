@@ -13,6 +13,9 @@ func (c *TelegramController) handleWizardCallback(ctx context.Context, chatID in
 	case data == "menu":
 		return true, c.sendMenu(ctx, chatID)
 	case data == "cf_token":
+		if c.isRoute53Provider() {
+			return true, c.sendMessageOrEdit(ctx, chatID, "Route53 使用 AWS 默认凭证链（环境变量或 IAM Role），无需配置 API Token。\n\n请直接选择 Hosted Zone。", dnsProviderPanelMenu(c.DNSProviderKind))
+		}
 		prefix := c.beginFlow(chatID, pendingCloudflareToken, nil)
 		return true, c.sendCloudflareTokenPrompt(ctx, chatID, prefix)
 	case data == "cf":

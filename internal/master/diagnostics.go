@@ -95,9 +95,15 @@ func BuildCloudflareSummary(ctx context.Context, store *db.Store, dns DNSProvide
 	}
 	lastResult, _ := store.GetStatusNote(ctx, noteKeyCloudflareZone)
 	lastErr, _ := store.GetLastError(ctx, errorKeyCloudflareZone)
+	tokenConfigured := strings.TrimSpace(token) != ""
+	tokenMasked := db.MaskedCloudflare(token)
+	if strings.HasPrefix(strings.TrimSpace(token), "route53:") {
+		tokenConfigured = true
+		tokenMasked = "AWS 默认凭证链"
+	}
 	summary := CloudflareSummary{
-		TokenMasked:     db.MaskedCloudflare(token),
-		TokenConfigured: strings.TrimSpace(token) != "",
+		TokenMasked:     tokenMasked,
+		TokenConfigured: tokenConfigured,
 		ZoneName:        zoneName,
 		ZoneID:          zoneID,
 		LastResult:      valueOrDash(lastResult),

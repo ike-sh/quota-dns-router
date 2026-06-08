@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,6 +39,12 @@ func OpenRuntime(ctx context.Context, cfg config.MasterConfig) (*Runtime, error)
 	if err := store.SavePolicy(ctx, policy); err != nil {
 		_ = store.Close()
 		return nil, err
+	}
+	if strings.EqualFold(cfg.DNSProvider, "route53") {
+		token, _, _, _ := store.GetCloudflareDefaults(ctx)
+		if strings.TrimSpace(token) == "" {
+			_ = store.SaveCloudflareDefaults(ctx, route53PlaceholderToken, "", "")
+		}
 	}
 	if cfg.SuggestedPublicAPIURL != "" {
 		_ = store.SetSetting(ctx, settingSuggestedPublicAPIURL, cfg.SuggestedPublicAPIURL)
@@ -88,7 +95,7 @@ func Run(ctx context.Context, cfg config.MasterConfig) error {
 			fmt.Fprintf(os.Stderr, "Telegram getMe failed: %v\n", err)
 		}
 		fmt.Fprintln(os.Stdout, "Telegram long polling started")
-		controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS)
+		controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS, cfg.DNSProvider)
 		errCh <- controller.Run(ctx)
 	}()
 	go func() {
@@ -144,6 +151,6 @@ func TelegramRun(ctx context.Context, cfg config.MasterConfig) error {
 		fmt.Fprintf(os.Stderr, "Telegram getMe failed: %v\n", err)
 	}
 	fmt.Fprintln(os.Stdout, "Telegram long polling started")
-	controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS)
+	controller := NewTelegramController(runtime.Bot, runtime.Store, cfg.PublicAPIURL, cfg.TelegramPollTimeout, runtime.DNS, cfg.DNSProvider)
 	return controller.Run(ctx)
 }

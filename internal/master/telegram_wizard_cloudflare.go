@@ -9,20 +9,33 @@ import (
 	"quota-dns-router-go/internal/config"
 )
 
+func (c *TelegramController) isRoute53Provider() bool {
+	return c.DNSProviderKind == "route53"
+}
+
 func (c *TelegramController) sendCloudflarePanel(ctx context.Context, chatID int64, prefix string) error {
-	summary, err := BuildCloudflareSummary(ctx, c.Store, nil)
+	summary, err := BuildCloudflareSummary(ctx, c.Store, c.DNS)
 	if err != nil {
 		return err
 	}
-	text := prefix + "☁️ Cloudflare 配置\n\n"
-	if summary.TokenConfigured {
+	text := prefix + dnsProviderPanelTitle(c.DNSProviderKind) + "\n\n"
+	if c.isRoute53Provider() {
+		text += "凭证：AWS 默认凭证链（环境变量 / IAM Role）\n"
+	} else if summary.TokenConfigured {
 		text += "Token：已配置 " + summary.TokenMasked + "\n"
 	} else {
 		text += "Token：未配置\n"
 	}
 	text += "Zone Name：" + valueOrDash(summary.ZoneName) + "\n"
 	text += "Zone ID：" + valueOrDash(maskMiddle(summary.ZoneID, 4, 4)) + "\n\n请选择操作："
-	return c.sendMessageOrEdit(ctx, chatID, text, cloudflarePanelMenu())
+	return c.sendMessageOrEdit(ctx, chatID, text, dnsProviderPanelMenu(c.DNSProviderKind))
+}
+
+func dnsProviderPanelTitle(kind string) string {
+	if strings.EqualFold(kind, "route53") {
+		return "🌐 Route53 配置"
+	}
+	return "☁️ Cloudflare 配置"
 }
 
 func (c *TelegramController) sendCloudflareTokenPrompt(ctx context.Context, chatID int64, prefix string) error {
@@ -35,8 +48,12 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 	if err != nil {
 		return err
 	}
+	if c.isRoute53Provider() && strings.TrimSpace(token) == "" {
+		_ = c.Store.SaveCloudflareDefaults(ctx, route53PlaceholderToken, "", "")
+		token = route53PlaceholderToken
+	}
 	if strings.TrimSpace(token) == "" {
-		return c.sendMessageOrEdit(ctx, chatID, prefix+"请先配置 Cloudflare Token。", cloudflareNeedTokenMenu())
+		return c.sendMessageOrEdit(ctx, chatID, prefix+"请先配置 Cloudflare Token。", dnsProviderNeedTokenMenu(c.DNSProviderKind))
 	}
 	if c.DNS == nil {
 		prefix += "当前进程未配置 Cloudflare 客户端，请手动输入 Zone Name。\n\n"
@@ -60,7 +77,7 @@ func (c *TelegramController) showCloudflareZoneChoices(ctx context.Context, chat
 	if len(zones) == 1 {
 		title = "检测到 1 个 Zone，是否使用这个 Zone？"
 	}
-	return c.sendMessageOrEdit(ctx, chatID, prefix+title, cloudflareZoneChoicesMenu(zones))
+	return c.sendMessageOrEdit(ctx, chatID, prefix+title, cloudflareZoneChoicesMenuForProvider(zones, c.DNSProviderKind))
 }
 
 func (c *TelegramController) sendCloudflareZoneNamePrompt(ctx context.Context, chatID int64, prefix string) error {

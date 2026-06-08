@@ -1,8 +1,9 @@
 # CHANGELOG
 
-## 0.2.2 (unreleased)
+## 0.2.2
 
 - Route53 DNS adapter（`QDR_DNS_PROVIDER=route53`，凭证走 AWS 默认链）。
+- Telegram Route53 面板：跳过 Token 配置，直接选择 Hosted Zone。
 - `/api/agent/report` 限流（120 次/分钟 / token 或 IP）。
 - join 限流 map 在条目过多时全局 sweep 过期 key。
 

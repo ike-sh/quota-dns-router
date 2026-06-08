@@ -160,7 +160,7 @@ func newTestTelegramController(t *testing.T) (*TelegramController, *recordingTel
 	}
 	rec := &recordingTelegramClient{}
 	bot := telegram.NewBot("token", 123, rec)
-	return NewTelegramController(bot, store, "http://127.0.0.1:8080", time.Second, nil), rec
+	return NewTelegramController(bot, store, "http://127.0.0.1:8080", time.Second, nil, "cloudflare"), rec
 }
 
 type recordingTelegramClient struct {

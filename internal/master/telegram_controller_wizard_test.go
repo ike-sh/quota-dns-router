@@ -1380,7 +1380,7 @@ func newTestTelegramControllerWithDNS(t *testing.T, dns DNSProvider) (*TelegramC
 	}
 	rec := &recordingTelegramClient{}
 	bot := telegram.NewBot("token", 123, rec)
-	return NewTelegramController(bot, store, "http://127.0.0.1:8080", time.Second, dns), rec
+	return NewTelegramController(bot, store, "http://127.0.0.1:8080", time.Second, dns, "cloudflare"), rec
 }
 
 func cloudflare403Err() error {
