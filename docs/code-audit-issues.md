@@ -113,6 +113,30 @@
 - **状态**：10 次/分钟/IP；report 120 次/分钟/token 或 IP；body 64KB 限制
 - **建议**：生产环境 Master 应置于可信反代后，避免公网直接暴露 join 端点
 
+## v0.2.3.5 审计
+
+### ✅ #B12 ResolveCurrentNode 信任过期 CurrentNodeID
+- **问题**：DB `current_node_id` 与 DNS 漂移时不查 DNS，切换判断基于错误节点
+- **修复**：有 DNS 配置时优先 DNS 解析；仅 API 失败时回退缓存；漂移时同步 `current_node_id`
+- **文件**：`internal/master/logic.go`
+
+### ✅ #B13 noTargetMessage 硬编码可用目标数
+- **修复**：提取 `selectTargetCandidates`，通知使用真实候选列表长度
+- **文件**：`internal/master/logic.go`
+
+### ✅ #B14 同节点多枚有效 Join 码
+- **修复**：`GenerateJoinCodeWithExpiry` 生成新码前删除同节点未使用旧码
+- **文件**：`internal/db/store.go`
+
+### ✅ #B15 从未上报节点不触发离线切换
+- **问题**：`LastReportedAt` 无效时 `reasonForSwitch` 永不返回离线
+- **修复**：按 `CreatedAt` 超过 `agent_offline_seconds` 视为离线
+- **文件**：`internal/master/logic.go`
+
+### ✅ #B16 AAAA UI 文案
+- **修复**：`dnsRecordLabel` 动态标签；setup/status 概览改为通用「DNS 记录」
+- **文件**：`telegram_shared.go`、`telegram_wizard_switch.go`、`setup_status.go` 等
+
 ## 验证
 
 ```bash

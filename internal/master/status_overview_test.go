@@ -189,7 +189,7 @@ func TestStatusRiskPendingTasks(t *testing.T) {
 		Nodes: []NodeDiagnostic{{Name: "hk-01", GroupName: "hk", Online: false, HasReported: false}},
 	})
 	text := FormatStatusRiskSummary(risks)
-	for _, want := range []string{"待完成：", "- 配置 DNS A 记录", "- 安装 Agent 到节点 hk-01"} {
+	for _, want := range []string{"待完成：", "- 配置 DNS 记录", "- 安装 Agent 到节点 hk-01"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected pending item %q, got %s", want, text)
 		}

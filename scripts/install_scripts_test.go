@@ -18,7 +18,7 @@ func TestInstallMasterHelpDoesNotPrompt(t *testing.T) {
 func TestInstallMasterVersionDoesNotPrompt(t *testing.T) {
 	out := runScript(t, "install-master.sh", "--version")
 	assertNotContains(t, out, "Telegram Bot Token:")
-	assertContains(t, out, "quota-dns-router install-master 0.2.3.4")
+	assertContains(t, out, "quota-dns-router install-master 0.2.3.5")
 }
 
 func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
@@ -30,7 +30,7 @@ func TestInstallAgentHelpDoesNotRequireJoinCode(t *testing.T) {
 func TestInstallAgentVersionDoesNotRequireJoinCode(t *testing.T) {
 	out := runScript(t, "install-agent.sh", "--version")
 	assertNotContains(t, out, "缺少 --join")
-	assertContains(t, out, "quota-dns-router install-agent 0.2.3.4")
+	assertContains(t, out, "quota-dns-router install-agent 0.2.3.5")
 }
 
 func TestInstallMasterDryRunDefaultsToBinaryRelease(t *testing.T) {
@@ -82,7 +82,7 @@ func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	masterOut := runBash(t, "QDR_INSTALL_MODE=source QDR_TELEGRAM_BOT_TOKEN=xxx QDR_TELEGRAM_ADMIN_ID=123 bash install-master.sh --yes --dry-run")
 	for _, want := range []string{
 		"安装模式：source",
-		"来源：GitHub source v0.2.3.4",
+		"来源：GitHub source v0.2.3.5",
 		"安装源码构建依赖",
 		"CGO_ENABLED=0 go build",
 		"尝试通过系统包管理器安装 Go",
@@ -92,7 +92,7 @@ func TestInstallSourceModeDryRunShowsSourceBuildFlow(t *testing.T) {
 	agentOut := runBash(t, "QDR_INSTALL_MODE=source bash install-agent.sh --join abc --master http://203.0.113.10:8080 --dry-run")
 	for _, want := range []string{
 		"安装模式：source",
-		"来源：GitHub source v0.2.3.4",
+		"来源：GitHub source v0.2.3.5",
 		"安装源码构建依赖",
 		"CGO_ENABLED=0 go build",
 		"尝试通过系统包管理器安装 Go",
@@ -225,7 +225,7 @@ func TestInstallScriptsPrintUninstallCommands(t *testing.T) {
 func TestInstallScriptsUseVersionedReleaseDownloads(t *testing.T) {
 	for _, name := range []string{"install-master.sh", "install-agent.sh"} {
 		body := readScript(t, name)
-		assertContains(t, body, `VERSION="0.2.3.4"`)
+		assertContains(t, body, `VERSION="0.2.3.5"`)
 		assertContains(t, body, `release_base="${repo_no_git}/releases/download/v${VERSION}"`)
 		assertContains(t, body, `/v${VERSION}/scripts/uninstall-`)
 	}
@@ -261,14 +261,14 @@ func TestSmokeScriptSupportsMasterAndAgent(t *testing.T) {
 	body := readScript(t, "smoke.sh")
 	for _, want := range []string{
 		"用法：smoke.sh master|agent",
-		"Master 版本为 0.2.3.4",
+		"Master 版本为 0.2.3.5",
 		"/healthz 存活探针",
 		"/readyz 就绪探针",
 		"本机 /api/status 可访问",
 		"qdr-master status",
 		"qdr-master config-check",
 		"qdr-master telegram-status",
-		"Agent 版本为 0.2.3.4",
+		"Agent 版本为 0.2.3.5",
 		"qdr-agent status",
 		"qdr-agent config-check",
 		"验收通过。",

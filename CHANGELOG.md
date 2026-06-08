@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.2.3.5
+
+- `ResolveCurrentNode` 优先 DNS 解析，修复 `current_node_id` 与 DNS 漂移时不切换的问题。
+- 从未上报节点按 `CreatedAt` 超时触发离线切换。
+- `noTargetMessage` 使用真实候选数；生成 Join 码时作废旧码。
+- AAAA 相关 UI 文案动态化；setup 概览改为通用「DNS 记录」。
+
 ## 0.2.3.4
 
 - 网卡计数器回绕时跳过模糊流量增量，避免误触发切换。

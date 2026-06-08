@@ -33,7 +33,7 @@ func (c *TelegramController) sendSwitchTargetMenu(ctx context.Context, chatID in
 	}
 	cfg, err := c.Store.GetCloudflareConfigByGroupID(ctx, group.ID)
 	if err != nil || strings.TrimSpace(cfg.RecordName) == "" {
-		return c.sendMessageOrEdit(ctx, chatID, "当前分组还没有 DNS A 记录，请先完成 DNS 配置。", dnsPanelMenu())
+		return c.sendMessageOrEdit(ctx, chatID, "当前分组还没有 "+dnsRecordLabel(GroupDNSRecordType(ctx, c.Store, group.ID))+"，请先完成 DNS 配置。", dnsPanelMenu())
 	}
 	if strings.TrimSpace(cfg.RecordID) == "" {
 		return c.sendMessageOrEdit(ctx, chatID, "当前分组的 DNS 记录还处于待绑定状态，请先在 DNS 面板绑定到节点。", dnsPanelMenu())

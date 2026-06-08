@@ -17,7 +17,7 @@ func TestBuildSetupStatusMissingItems(t *testing.T) {
 	if status.PublicURLConfigured {
 		t.Fatal("expected local URL to be unconfigured")
 	}
-	want := []string{"Master 公网地址", "Cloudflare Token", "Zone Name", "Zone ID", "DNS A 记录", "分组", "节点"}
+	want := []string{"Master 公网地址", "Cloudflare Token", "Zone Name", "Zone ID", "DNS 记录", "分组", "节点"}
 	for _, item := range want {
 		if !contains(status.Missing, item) {
 			t.Fatalf("expected missing item %s, got %v", item, status.Missing)

@@ -189,12 +189,13 @@ func (s *Service) BuildDecision(ctx context.Context, groupID string) (SwitchDeci
 	if reason == "" {
 		return SwitchDecision{Group: group, Config: cfg, Current: current}, nil
 	}
-	target, ok := SelectTarget(current.ID, nodes, policy, s.now())
-	if !ok {
-		msg := noTargetMessage(group, current, reason, len(nodes), 0)
+	candidates := selectTargetCandidates(current.ID, nodes, policy, s.now())
+	if len(candidates) == 0 {
+		msg := noTargetMessage(group, current, reason, len(nodes), len(candidates))
 		_, _ = s.notifyOnce(ctx, "no_target", noTargetNotificationTarget(group.ID, current, reason), msg, "")
 		return SwitchDecision{Group: group, Config: cfg, Current: current, Reason: reason, Triggered: false}, nil
 	}
+	target := candidates[0]
 	return SwitchDecision{
 		Group:       group,
 		Config:      cfg,
@@ -207,6 +208,24 @@ func (s *Service) BuildDecision(ctx context.Context, groupID string) (SwitchDeci
 }
 
 func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db.CloudflareConfig, nodes []db.NodeUsage) (db.NodeUsage, error) {
+	if strings.TrimSpace(cfg.RecordName) != "" && s.DNS != nil {
+		node, err := s.resolveCurrentNodeFromDNS(ctx, group, cfg, nodes)
+		if err == nil {
+			return node, nil
+		}
+		var unresolved *CurrentNodeUnresolvedError
+		if errors.As(err, &unresolved) {
+			return db.NodeUsage{}, err
+		}
+		if cached, cacheErr := resolveCurrentNodeFromCache(group, nodes); cacheErr == nil {
+			return cached, nil
+		}
+		return db.NodeUsage{}, err
+	}
+	return resolveCurrentNodeFromCache(group, nodes)
+}
+
+func resolveCurrentNodeFromCache(group db.Group, nodes []db.NodeUsage) (db.NodeUsage, error) {
 	if group.CurrentNodeID.Valid {
 		for _, node := range nodes {
 			if node.ID == group.CurrentNodeID.String {
@@ -214,6 +233,10 @@ func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db
 			}
 		}
 	}
+	return db.NodeUsage{}, sql.ErrNoRows
+}
+
+func (s *Service) resolveCurrentNodeFromDNS(ctx context.Context, group db.Group, cfg db.CloudflareConfig, nodes []db.NodeUsage) (db.NodeUsage, error) {
 	recordID := cfg.RecordID
 	zoneID := cfg.ZoneID
 	if zoneID == "" {
@@ -232,7 +255,9 @@ func (s *Service) ResolveCurrentNode(ctx context.Context, group db.Group, cfg db
 	}
 	for _, node := range nodes {
 		if strings.TrimSpace(node.PublicIP) == strings.TrimSpace(record.Content) {
-			_ = s.Store.UpdateGroupCurrentNode(ctx, group.ID, node.ID)
+			if !group.CurrentNodeID.Valid || group.CurrentNodeID.String != node.ID {
+				_ = s.Store.UpdateGroupCurrentNode(ctx, group.ID, node.ID)
+			}
 			return node, nil
 		}
 	}
@@ -250,10 +275,12 @@ func reasonForSwitch(current db.NodeUsage, policy db.Policy, now time.Time) stri
 	if !current.AutoSwitch {
 		return switchReasonNoAuto
 	}
-	if !current.Online && current.LastReportedAt.Valid {
-		if now.Sub(current.LastReportedAt.Time) > time.Duration(policy.AgentOfflineSeconds)*time.Second {
+	if current.LastReportedAt.Valid {
+		if !current.Online && now.Sub(current.LastReportedAt.Time) > time.Duration(policy.AgentOfflineSeconds)*time.Second {
 			return switchReasonOffline
 		}
+	} else if !current.CreatedAt.IsZero() && now.Sub(current.CreatedAt) > time.Duration(policy.AgentOfflineSeconds)*time.Second {
+		return switchReasonOffline
 	}
 	if db.UsagePercent(current.UsedBytes, current.MonthlyQuotaBytes) >= float64(current.ThresholdPercent) {
 		return switchReasonThreshold
@@ -261,7 +288,7 @@ func reasonForSwitch(current db.NodeUsage, policy db.Policy, now time.Time) stri
 	return ""
 }
 
-func SelectTarget(currentID string, nodes []db.NodeUsage, policy db.Policy, now time.Time) (db.NodeUsage, bool) {
+func selectTargetCandidates(currentID string, nodes []db.NodeUsage, policy db.Policy, now time.Time) []db.NodeUsage {
 	candidates := make([]db.NodeUsage, 0, len(nodes))
 	for _, node := range nodes {
 		if node.ID == currentID || !node.Enabled || !node.AutoSwitch {
@@ -286,6 +313,11 @@ func SelectTarget(currentID string, nodes []db.NodeUsage, policy db.Policy, now 
 		}
 		return candidates[i].Name < candidates[j].Name
 	})
+	return candidates
+}
+
+func SelectTarget(currentID string, nodes []db.NodeUsage, policy db.Policy, now time.Time) (db.NodeUsage, bool) {
+	candidates := selectTargetCandidates(currentID, nodes, policy, now)
 	if len(candidates) == 0 {
 		return db.NodeUsage{}, false
 	}

@@ -42,6 +42,22 @@ func TestCooldown(t *testing.T) {
 	}
 }
 
+func TestReasonForSwitchNeverReportedNode(t *testing.T) {
+	policy := db.DefaultPolicy()
+	now := time.Date(2026, 6, 10, 0, 0, 0, 0, time.UTC)
+	current := db.NodeUsage{
+		Node: db.Node{
+			Enabled:    true,
+			AutoSwitch: true,
+			Online:     false,
+			CreatedAt:  now.Add(-10 * time.Minute),
+		},
+	}
+	if reason := reasonForSwitch(current, policy, now); reason != switchReasonOffline {
+		t.Fatalf("expected offline reason for never-reported node, got %q", reason)
+	}
+}
+
 func TestReasonForSwitchThreshold(t *testing.T) {
 	policy := db.DefaultPolicy()
 	current := db.NodeUsage{
@@ -304,6 +320,59 @@ func TestNeverReportedNodeDoesNotSendOfflineNotification(t *testing.T) {
 	if len(notifier.messages) != 0 {
 		t.Fatalf("expected no offline notification for never-reported node, got %v", notifier.messages)
 	}
+}
+
+func TestResolveCurrentNodePrefersDNSOverStaleCurrentNodeID(t *testing.T) {
+	store := testMasterStore(t)
+	ctx := context.Background()
+	group, err := store.CreateGroup(ctx, "hk", 600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeA, err := store.CreateNode(ctx, db.Node{
+		GroupID: group.ID, Name: "hk-01", PublicIP: "203.0.113.10",
+		MonthlyQuotaBytes: 1000, ThresholdPercent: 80, ResetDay: 1, TrafficMode: db.TrafficModeBoth,
+		Enabled: true, AutoSwitch: true, Priority: 10, PreferredIface: "auto", ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeB, err := store.CreateNode(ctx, db.Node{
+		GroupID: group.ID, Name: "hk-02", PublicIP: "203.0.113.20",
+		MonthlyQuotaBytes: 1000, ThresholdPercent: 80, ResetDay: 1, TrafficMode: db.TrafficModeBoth,
+		Enabled: true, AutoSwitch: true, Priority: 10, PreferredIface: "auto", ReportIntervalSeconds: 60,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.UpdateGroupCurrentNode(ctx, group.ID, nodeA.ID)
+	_ = store.SaveCloudflareDefaults(ctx, "token", "example.com", "zone-1")
+	cfg, err := store.CreateOrUpdateCloudflareConfig(ctx, group.ID, "hk.example.com", "rec-1", "A", 60, false, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usages, err := store.ListNodeUsagesByGroup(ctx, group.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store, nil, fakeDNS{
+		record: cloudflare.DNSRecord{ID: "rec-1", Type: "A", Name: "hk.example.com", Content: nodeB.PublicIP, TTL: 60},
+	})
+	current, err := svc.ResolveCurrentNode(ctx, group, cfg, usages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.ID != nodeB.ID {
+		t.Fatalf("expected DNS-matched node %s, got %s", nodeB.ID, current.ID)
+	}
+	updated, err := store.GetGroupByID(ctx, group.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.CurrentNodeID.Valid || updated.CurrentNodeID.String != nodeB.ID {
+		t.Fatalf("expected current_node_id synced to %s, got %v", nodeB.ID, updated.CurrentNodeID)
+	}
+	_ = nodeA
 }
 
 func TestResolveCurrentNodeReturnsErrorWhenDNSDoesNotMatchNode(t *testing.T) {

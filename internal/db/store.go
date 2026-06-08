@@ -851,6 +851,11 @@ func (s *Store) GenerateJoinCodeWithExpiry(ctx context.Context, nodeID string, v
 		return "", time.Time{}, err
 	}
 	expiresAt := time.Now().Add(validFor)
+	if _, err = s.db.ExecContext(ctx, `
+		DELETE FROM join_codes WHERE node_id = ? AND used_at IS NULL
+	`, nodeID); err != nil {
+		return "", time.Time{}, err
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO join_codes(id, node_id, code_hash, expires_at)
 		VALUES(?, ?, ?, ?)

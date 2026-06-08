@@ -24,3 +24,7 @@ func formatDNSRecordType(recordType string) string {
 func formatDNSCurrentRecordLine(recordType, value string) string {
 	return fmt.Sprintf("当前 %s 记录：%s", formatDNSRecordType(recordType), valueOrDash(value))
 }
+
+func dnsRecordLabel(recordType string) string {
+	return "DNS " + formatDNSRecordType(recordType) + " 记录"
+}

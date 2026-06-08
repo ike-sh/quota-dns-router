@@ -100,7 +100,7 @@ func MissingSetupItems(status SetupStatus) []string {
 		missing = append(missing, "Zone ID")
 	}
 	if status.DNSConfigCount == 0 {
-		missing = append(missing, "DNS A 记录")
+		missing = append(missing, "DNS 记录")
 	}
 	if status.GroupCount == 0 {
 		missing = append(missing, "分组")
@@ -130,7 +130,7 @@ func FormatSetupGuide(status SetupStatus) string {
 	b.WriteString("初始化步骤：优先点击下面的按钮完成。\n")
 	b.WriteString(stepLine(status.PublicURLConfigured, "1) 配置 Master 公网地址", "按钮：1. 配置 Master 公网地址"))
 	b.WriteString(stepLine(status.CloudflareTokenConfigured && strings.TrimSpace(status.ZoneName) != "" && strings.TrimSpace(status.ZoneID) != "", "2) 配置 Cloudflare Token / Zone", "按钮：2. Cloudflare 配置"))
-	b.WriteString(stepLine(status.DNSConfigCount > 0, "3) 配置 DNS A 记录", "按钮：3. DNS 配置"))
+	b.WriteString(stepLine(status.DNSConfigCount > 0, "3) 配置 DNS 记录", "按钮：3. DNS 配置"))
 	b.WriteString(stepLine(status.GroupCount > 0, "4) 创建分组", "按钮：4. 分组管理"))
 	b.WriteString(stepLine(status.NodeCount > 0, "5) 添加节点", "按钮：5. 节点管理"))
 	b.WriteString(stepLine(len(AgentInstallMissingItems(status)) == 0 && status.NodeCount > 0, "6) 生成 Agent 安装命令", "按钮：6. Agent 安装"))
@@ -154,7 +154,7 @@ func FormatStatusReport(status SetupStatus, summary db.StatusSummary, extras ...
 	b.WriteString("📊 当前状态\n\n")
 	b.WriteString(fmt.Sprintf("Master URL：%s %s\n", statusOK(status.PublicURLConfigured), valueOrDash(status.PublicAPIURL)))
 	b.WriteString("Cloudflare：" + formatCloudflareStatusLine(status, extra.Cloudflare, hasExtras) + "\n")
-	b.WriteString(fmt.Sprintf("DNS A 记录：%d\n", status.DNSConfigCount))
+	b.WriteString(fmt.Sprintf("DNS 记录：%d\n", status.DNSConfigCount))
 	b.WriteString(fmt.Sprintf("分组：%d\n", status.GroupCount))
 	b.WriteString(fmt.Sprintf("节点：%d\n", status.NodeCount))
 	b.WriteString(fmt.Sprintf("在线 Agent：%d\n", status.OnlineAgentCount))

@@ -239,7 +239,7 @@ func BuildStatusRiskSummary(input StatusRiskInput) StatusRiskSummary {
 		add(2, "⚠️ Zone 未验证")
 	}
 	if input.Setup.DNSConfigCount == 0 {
-		addPending("配置 DNS A 记录")
+		addPending("配置 DNS 记录")
 	}
 	if !isBlankOrDash(input.Cloudflare.LastError) {
 		add(2, "⚠️ Cloudflare 配置错误："+sanitizeStatusMessage(input.Cloudflare.LastError))

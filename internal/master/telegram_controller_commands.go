@@ -3,6 +3,7 @@ package master
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -247,7 +248,7 @@ func (c *TelegramController) buildManualSwitchDecision(ctx context.Context, grou
 		return SwitchDecision{}, err
 	}
 	if strings.TrimSpace(cfg.RecordName) == "" {
-		return SwitchDecision{}, errors.New("当前分组还没有 DNS A 记录，请先完成 DNS 配置。")
+		return SwitchDecision{}, fmt.Errorf("当前分组还没有 %s，请先完成 DNS 配置。", dnsRecordLabel(dnsRecordType(cfg, "")))
 	}
 	if strings.TrimSpace(cfg.ZoneID) == "" {
 		zoneID, lookupErr := c.DNS.LookupZoneID(ctx, cfg.APIToken, cfg.ZoneName)
