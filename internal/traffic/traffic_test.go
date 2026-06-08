@@ -19,8 +19,8 @@ func TestBuildSampleCounterReset(t *testing.T) {
 	current := Snapshot{Iface: "eth0", RX: 10, TX: 20}
 	prev := State{Last: Snapshot{Iface: "eth0", RX: 100, TX: 200}}
 	sample := BuildSample(current, prev)
-	if sample.RXDelta != 10 || sample.TXDelta != 20 {
-		t.Fatalf("unexpected reset delta: %+v", sample)
+	if sample.RXDelta != 0 || sample.TXDelta != 0 {
+		t.Fatalf("expected zero delta after counter reset, got %+v", sample)
 	}
 }
 

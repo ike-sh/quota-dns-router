@@ -13,6 +13,18 @@ import (
 	r53 "github.com/aws/aws-sdk-go-v2/service/route53"
 )
 
+func TestSplitRoute53SetIdentifier(t *testing.T) {
+	if got := splitRoute53SetIdentifier("hk.example.com/A#primary"); got != "primary" {
+		t.Fatalf("expected primary, got %q", got)
+	}
+	if got := splitRoute53SetIdentifier("hk.example.com/A"); got != "" {
+		t.Fatalf("expected empty set identifier, got %q", got)
+	}
+	if got := splitRoute53SetIdentifier("rec-cloudflare-opaque-id"); got != "" {
+		t.Fatalf("cloudflare-style record id should not parse as set identifier, got %q", got)
+	}
+}
+
 func TestListZonesWithMockAWS(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !strings.Contains(r.URL.Path, "hostedzone") {

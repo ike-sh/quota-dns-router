@@ -118,24 +118,35 @@ func (c *Client) findRecord(ctx context.Context, zoneID, recordName, recordType 
 	return types.ResourceRecordSet{}, fmt.Errorf("未找到 DNS 记录: %s", recordName)
 }
 
+func splitRoute53SetIdentifier(recordID string) string {
+	recordID = strings.TrimSpace(recordID)
+	if idx := strings.LastIndex(recordID, "#"); idx >= 0 && idx < len(recordID)-1 {
+		return recordID[idx+1:]
+	}
+	return ""
+}
+
 func (c *Client) upsert(ctx context.Context, zoneID, recordName, recordType, value string, ttl int, recordID string) error {
-	_ = recordID
 	if ttl <= 0 {
 		ttl = 300
+	}
+	rrs := &types.ResourceRecordSet{
+		Name: awsStringPtr(fqdn(recordName)),
+		Type: types.RRType(strings.ToUpper(recordType)),
+		TTL:  awsInt64Ptr(int64(ttl)),
+		ResourceRecords: []types.ResourceRecord{{
+			Value: awsStringPtr(value),
+		}},
+	}
+	if setID := splitRoute53SetIdentifier(recordID); setID != "" {
+		rrs.SetIdentifier = awsStringPtr(setID)
 	}
 	_, err := c.svc.ChangeResourceRecordSets(ctx, &r53.ChangeResourceRecordSetsInput{
 		HostedZoneId: awsStringPtr(zoneID),
 		ChangeBatch: &types.ChangeBatch{
 			Changes: []types.Change{{
-				Action: types.ChangeActionUpsert,
-				ResourceRecordSet: &types.ResourceRecordSet{
-					Name: awsStringPtr(fqdn(recordName)),
-					Type: types.RRType(strings.ToUpper(recordType)),
-					TTL:  awsInt64Ptr(int64(ttl)),
-					ResourceRecords: []types.ResourceRecord{{
-						Value: awsStringPtr(value),
-					}},
-				},
+				Action:            types.ChangeActionUpsert,
+				ResourceRecordSet: rrs,
 			}},
 		},
 	})

@@ -214,7 +214,8 @@ func computeDelta(prev, cur int64) int64 {
 	if cur >= prev {
 		return cur - prev
 	}
-	return cur
+	// Counter reset (reboot / iface rollover): skip ambiguous sample to avoid false threshold spikes.
+	return 0
 }
 
 func DiscoverPublicIP(override string, client *http.Client) string {
