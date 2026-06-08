@@ -79,18 +79,18 @@ Master 推荐安装在一台稳定的 Linux amd64 服务器上。安装前准备
 交互安装：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/install-master.sh)
 ```
 
 非交互安装：
 
 ```bash
-QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID" bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh) --yes
+QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID" bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/install-master.sh) --yes
 ```
 
 安装器默认使用 `QDR_INSTALL_MODE=binary`：
 
-- 从 GitHub Releases 下载 `v0.1.0` 二进制包。
+- 从 GitHub Releases 下载 `v0.2.0` 二进制包。
 - 不安装 Go。
 - 不执行 `git clone`。
 - 不执行源码构建。
@@ -100,11 +100,11 @@ QDR_TELEGRAM_BOT_TOKEN="你的BotToken" QDR_TELEGRAM_ADMIN_ID="你的管理员ID
 源码模式：
 
 ```bash
-QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
+QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/install-master.sh)
 ```
 
 源码模式适合非 amd64 或需要自行构建的环境，需要 Go 和较多磁盘空间。
-源码模式默认构建 `v0.1.0`，需要指定其他引用时可以设置 `QDR_BRANCH`。
+源码模式默认构建 `v0.2.0`，需要指定其他引用时可以设置 `QDR_BRANCH`。
 
 常用路径：
 
@@ -279,7 +279,7 @@ Master 会综合以下条件选择目标节点：
 重新执行安装脚本即可升级或修复安装。
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/install-master.sh)
 ```
 
 安装器会检测已有安装：
@@ -300,20 +300,20 @@ Agent 升级同样使用 Telegram 中生成的安装命令。已有 `agent.env` 
 卸载 Master：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-master.sh) --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/uninstall-master.sh) --yes
 ```
 
 卸载 Agent：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/uninstall-agent.sh) --yes
 ```
 
 完全清理：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-master.sh) --yes --purge
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/uninstall-agent.sh) --yes --purge
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/uninstall-master.sh) --yes --purge
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/uninstall-agent.sh) --yes --purge
 ```
 
 `--purge` 会清理配置、数据、日志、unit 和二进制。
@@ -325,13 +325,13 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1
 Master：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/smoke.sh) master
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/smoke.sh) master
 ```
 
 Agent：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/smoke.sh) agent
+bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/smoke.sh) agent
 ```
 
 检查项包括二进制、版本输出、systemd 状态、env 权限、数据目录权限和 CLI 诊断命令。
@@ -391,7 +391,7 @@ journalctl -u quota-dns-router-agent -n 100 --no-pager
 确认服务器是 Linux amd64，并检查 GitHub Releases 访问。其他架构使用源码模式：
 
 ```bash
-QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.1.0/scripts/install-master.sh)
+QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-sh/quota-dns-router/v0.2.0/scripts/install-master.sh)
 ```
 
 ### 卸载会删除数据库吗？
@@ -400,7 +400,7 @@ QDR_INSTALL_MODE=source bash <(curl -fsSL https://raw.githubusercontent.com/ike-
 
 ## Release 与架构支持
 
-`v0.1.0` 发布资产：
+`v0.2.0` 发布资产：
 
 - `qdr-master_linux_amd64.tar.gz`
 - `qdr-agent_linux_amd64.tar.gz`

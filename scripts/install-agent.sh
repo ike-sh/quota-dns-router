@@ -49,7 +49,7 @@ usage() {
   QDR_INSTALL_MODE           安装模式：binary / source / auto，默认 binary
   QDR_ALLOW_SOURCE_FALLBACK  auto + --yes 时允许失败后继续 source，设为 1 开启
   QDR_REPO                   GitHub 仓库，默认 https://github.com/ike-sh/quota-dns-router
-  QDR_BRANCH                 Git 分支或标签，默认 v0.1.0
+  QDR_BRANCH                 Git 分支或标签，默认 v0.2.0
 EOF
 }
 
