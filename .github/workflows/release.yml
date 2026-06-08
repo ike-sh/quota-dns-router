@@ -38,6 +38,8 @@ jobs:
 
               if [ "${arch}" = "amd64" ]; then
                 "${out_dir}/${bin}" version
+              else
+                file "${out_dir}/${bin}" | grep -q 'ARM aarch64'
               fi
 
               printf '%s\n' \
